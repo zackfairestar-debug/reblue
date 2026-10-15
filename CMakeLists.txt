@@ -16,6 +16,11 @@ option(REBLUE_BUILD_INSTALLER "Build the built-in first-run disc installer" ON)
 option(REBLUE_PSO_CAP "Compile in the PSO predictor-miss capture instrument" OFF)
 option(REBLUE_PROFILING "Compile in Tracy zones (never in Release)" ON)
 option(REBLUE_PCH "Precompile the hot shared headers" ON)
+# Mobile drivers (Adreno among them) report shaderInt64 = false and reject any
+# pipeline whose SPIR-V declares Int64, which the guest shaders' 64-bit
+# constant addresses do. XenosRecomp can lower that arithmetic to 32-bit pairs.
+cmake_dependent_option(REBLUE_SHADERS_NO_INT64
+    "Emit guest SPIR-V without the Int64 capability" ON "ANDROID" OFF)
 
 set(REBLUE_TARGETS reblue)
 set(REBLUE_D3D12_TARGETS "")

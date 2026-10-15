@@ -296,9 +296,13 @@ plume::RenderPipeline *GetOrCreatePipeline(const PipelineState &state,
   if (out_created)
     *out_created = true;
   auto p = Build(state);
-  if (!p)
-    return nullptr;
   std::lock_guard lock(g_mutex);
+  // A driver that rejects a pipeline rejects it every time, so the failure is
+  // cached too: otherwise every draw retries the build and logs it again.
+  if (!p) {
+    g_pipelines.try_emplace(key, nullptr);
+    return nullptr;
+  }
   // try_emplace handles a concurrent build of the same key (lock was dropped).
   auto [it, inserted] = g_pipelines.try_emplace(key, std::move(p));
   return it->second.get();

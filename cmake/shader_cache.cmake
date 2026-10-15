@@ -24,6 +24,10 @@ function(reblue_shader_cache)
         set(recomp_command "$<TARGET_FILE:${ARG_RECOMP_TARGET}>")
         set(recomp_depends ${ARG_RECOMP_TARGET})
     endif()
+    if(REBLUE_SHADERS_NO_INT64)
+        set(recomp_command ${CMAKE_COMMAND} -E env XENOS_RECOMP_LOWER_INT64=1
+            ${recomp_command})
+    endif()
 
     add_custom_command(
         OUTPUT "${ARG_OUTPUT_CPP}"
