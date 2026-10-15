@@ -48,7 +48,18 @@ REXCVAR_DEFINE_BOOL(bd_dred, true, kCvarGroup,
                     "so a lost device names the op and resource it died on. "
                     "Costs a little GPU time per op. Requires restart.");
 
-REXCVAR_DEFINE_BOOL(bd_scene_color_r11g11b10, false, kCvarGroup,
+#if defined(__ANDROID__)
+// Phone GPUs are bandwidth bound: the 32-bit scene format halves what every
+// scene pass reads and writes. Android's compositor never tears, so vsync only
+// costs the 60 -> 30 -> 20 fps steps once a frame runs long.
+constexpr bool kDefaultSceneR11G11B10 = true;
+constexpr bool kDefaultVsync = false;
+#else
+constexpr bool kDefaultSceneR11G11B10 = false;
+constexpr bool kDefaultVsync = true;
+#endif
+
+REXCVAR_DEFINE_BOOL(bd_scene_color_r11g11b10, kDefaultSceneR11G11B10, kCvarGroup,
                     "Store the HDR scene as R11G11B10_FLOAT instead of "
                     "R16G16B16A16_FLOAT: half the VRAM per scene surface, "
                     "no alpha channel, 6/6/5-bit mantissas. Requires "
@@ -153,7 +164,7 @@ REXCVAR_DEFINE_INT32(bd_fov_offset, 0, kCvarGroup,
                      "it.")
     .range(0, 75);
 
-REXCVAR_DEFINE_BOOL(bd_vsync, true, kCvarGroup, "Vertical sync.");
+REXCVAR_DEFINE_BOOL(bd_vsync, kDefaultVsync, kCvarGroup, "Vertical sync.");
 
 namespace bd::gpu {
 namespace {

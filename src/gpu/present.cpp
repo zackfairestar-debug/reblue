@@ -71,6 +71,30 @@ void PaceFrame(bool idle = false) {
   }
 }
 
+// Where each presented frame's time went, summed over the perf window: the
+// wait for the swapchain image (display/vsync bound), for the frame slot the
+// GPU still holds (GPU bound), and in vkQueuePresent. The rest of the frame
+// is the guest and the draw recording on the CPU.
+struct FrameWaits {
+  double acquire_ms = 0, gpu_ms = 0, present_ms = 0;
+};
+FrameWaits g_waits;
+
+class WaitTimer {
+public:
+  explicit WaitTimer(double &sum)
+      : sum_(sum), start_(std::chrono::steady_clock::now()) {}
+  ~WaitTimer() {
+    sum_ += std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - start_)
+                .count();
+  }
+
+private:
+  double &sum_;
+  std::chrono::steady_clock::time_point start_;
+};
+
 // One log line every kPerfWindow with the presented frame rate and the worst
 // frame, so a slow device leaves numbers behind instead of an impression.
 void LogFrameRate() {
@@ -89,8 +113,17 @@ void LogFrameRate() {
     return;
   const double seconds =
       std::chrono::duration<double>(now - window_start).count();
-  BD_INFO("[perf] {:.1f} fps over {:.0f}s, worst frame {:.1f} ms",
-          frames / seconds, seconds, worst_ms);
+  const double frame_ms = seconds * 1000.0 / frames;
+  const double acquire = g_waits.acquire_ms / frames;
+  const double gpu = g_waits.gpu_ms / frames;
+  const double present = g_waits.present_ms / frames;
+  BD_INFO("[perf] {:.1f} fps over {:.0f}s, worst frame {:.1f} ms | per frame "
+          "{:.1f} ms: cpu {:.1f}, gpu wait {:.1f}, image wait {:.1f}, "
+          "present {:.1f} (fps cap {}, vsync {})",
+          frames / seconds, seconds, worst_ms, frame_ms,
+          frame_ms - acquire - gpu - present, gpu, acquire, present,
+          bd::engine::Settings::Get().FPSLimit(), Settings::Get().Vsync());
+  g_waits = {};
   window_start = now;
   frames = 0;
   worst_ms = 0.0;
@@ -305,6 +338,7 @@ void Video::Present(GuestTexture *frontBuffer) {
   u32 texture_index = 0;
   {
     BD_CPU_ZONE("AcquireTexture");
+    WaitTimer timer(g_waits.acquire_ms);
     if (!s.swap_chain->acquireTexture(
             s.acquire_semaphores[s.frame.load(std::memory_order_relaxed)].get(),
             &texture_index)) {
@@ -359,6 +393,7 @@ void Video::Present(GuestTexture *frontBuffer) {
   ApplyVsync(s);
   {
     BD_CPU_ZONE("PresentSwap");
+    WaitTimer timer(g_waits.present_ms);
     if (!s.swap_chain->present(texture_index, signals, 1)) {
       if (!CheckDeviceRemoved("swapchain present"))
         s.resize_requested.store(true, std::memory_order_release);
@@ -366,6 +401,7 @@ void Video::Present(GuestTexture *frontBuffer) {
   }
   {
     BD_CPU_ZONE("WaitFence");
+    WaitTimer timer(g_waits.gpu_ms);
     AdvanceAndWaitReused(s);
   }
   const u32 reclaimed = s.frame.load(std::memory_order_relaxed);
