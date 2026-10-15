@@ -411,6 +411,24 @@ bool Video::CreateHostDevice(rex::ui::Window *window) {
     caps += std::format(" | DRED {}", dred_state);
 #endif
     BD_INFO("{}", caps);
+#if !defined(REBLUE_D3D12)
+    {
+      // Every recompiled guest shader declares Int64 and
+      // PhysicalStorageBufferAddresses, which mobile drivers do not all have.
+      auto *vk_dev = static_cast<plume::VulkanDevice *>(s.device.get());
+      VkPhysicalDeviceFeatures f{};
+      vkGetPhysicalDeviceFeatures(vk_dev->physicalDevice, &f);
+      const auto &c = vk_dev->capabilities;
+      BD_INFO("Vulkan features: shaderInt64={} bufferDeviceAddress={} "
+              "descriptorIndexing={} shaderClipDistance={} depthClamp={} "
+              "independentBlend={} sampleRateShading={} "
+              "storageImageWriteWithoutFormat={}",
+              bool(f.shaderInt64), c.bufferDeviceAddress, c.descriptorIndexing,
+              bool(f.shaderClipDistance), bool(f.depthClamp),
+              bool(f.independentBlend), bool(f.sampleRateShading),
+              bool(f.shaderStorageImageWriteWithoutFormat));
+    }
+#endif
 
     // kNumFrames + 1: a flip model swapchain needs one back buffer beyond the
     // frames in flight so acquiring N+1 never waits on scanout.
@@ -857,6 +875,33 @@ CreateHostGraphicsPipeline(plume::RenderDevice *device,
   ) {
     BD_ERROR("CreateHostGraphicsPipeline({}) failed: backend pipeline null",
              tag ? tag : "?");
+#if !defined(REBLUE_D3D12)
+    // The backend prints the VkResult to stderr; this records what was asked
+    // for, so a driver that rejects one class of pipeline shows which.
+    static std::atomic<u32> s_detailed{0};
+    if (s_detailed.fetch_add(1, std::memory_order_relaxed) < 8) {
+      auto module_ok = [](const plume::RenderShader *shader) {
+        return shader ? (static_cast<const plume::VulkanShader *>(shader)->vk !=
+                                 VK_NULL_HANDLE
+                             ? "ok"
+                             : "MODULE NULL")
+                      : "none";
+      };
+      std::string inputs;
+      for (u32 i = 0; i < desc.inputElementsCount; ++i)
+        inputs += std::format("{}{}", i ? "," : "",
+                              static_cast<u32>(desc.inputElements[i].format));
+      BD_ERROR("  vs={} ps={} rt={}x{} depth={} samples={} spec={} "
+               "topology={} inputs=[{}]",
+               module_ok(desc.vertexShader), module_ok(desc.pixelShader),
+               desc.renderTargetCount,
+               static_cast<u32>(desc.renderTargetFormat[0]),
+               static_cast<u32>(desc.depthTargetFormat),
+               static_cast<u32>(desc.multisampling.sampleCount),
+               desc.specConstantsCount,
+               static_cast<u32>(desc.primitiveTopology), inputs);
+    }
+#endif
     CheckDeviceRemoved(tag ? tag : "pipeline");
     return nullptr;
   }
