@@ -10,5 +10,6 @@
 #include "ui/screen_fade.h"
 #include "ui/settings.h"
 #include "ui/theme.h"
+#include "ui/touch_controls.h"
 #include "ui/update_prompt_dialog.h"
 #include "ui/update_status.h"

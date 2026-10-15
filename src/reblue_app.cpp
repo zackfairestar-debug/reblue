@@ -346,6 +346,17 @@ void ReblueApp::OnCreateDialogs(rex::ui::ImGuiDrawer *drawer) {
 
   fade_overlay_ = std::make_unique<bd::ui::FadeOverlay>(drawer);
   pause_overlay_ = std::make_unique<bd::ui::PauseOverlay>(drawer);
+#if defined(__ANDROID__)
+  // Off while the installer is up, so its ImGui windows keep taking taps as
+  // mouse clicks.
+  touch_controls_ = std::make_unique<bd::ui::TouchControls>(drawer, [this] {
+#ifdef REBLUE_BUILD_INSTALLER
+    return installer_wizard_ == nullptr;
+#else
+    return true;
+#endif
+  });
+#endif
 
   rex::ui::UnregisterBind("bind_debug_overlay");
   if (!bd::Settings::Get().Devmode()) {

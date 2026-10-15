@@ -115,6 +115,9 @@ private:
 #endif
   std::unique_ptr<bd::ui::FadeOverlay> fade_overlay_;
   std::unique_ptr<bd::ui::PauseOverlay> pause_overlay_;
+#if defined(__ANDROID__)
+  std::unique_ptr<bd::ui::TouchControls> touch_controls_;
+#endif
 
   // The check the prompt last answered, so a re-run offers its build instead
   // of reading as the one already declined.
