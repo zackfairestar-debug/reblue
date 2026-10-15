@@ -13,7 +13,9 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <filesystem>
 #include <format>
+#include <fstream>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -33,6 +35,7 @@
 
 #include "gpu/gpu_profiling.h"
 
+#include "core/app_root.h"
 #include "core/logging.h"
 #include "core/memory_helpers.h"
 #include "core/settings.h"
@@ -115,6 +118,82 @@ bool BuildPresentSemaphores(VideoState &s) {
   }
   return true;
 }
+
+#if defined(__ANDROID__)
+namespace {
+
+// Mobile shader compilers are slow and the driver keeps nothing between runs,
+// so every pipeline a session builds is kept here for the next one. Vulkan
+// checks the header itself and ignores data from another driver or GPU.
+std::filesystem::path PipelineCachePath() {
+  return bd::AppRootFolder() / "cache" / "vulkan_pipelines.bin";
+}
+
+void LoadPipelineCache(VideoState &s) {
+  auto *dev = static_cast<plume::VulkanDevice *>(s.device.get());
+  std::vector<char> data;
+  {
+    std::ifstream in(PipelineCachePath(), std::ios::binary | std::ios::ate);
+    if (in) {
+      data.resize(static_cast<size_t>(in.tellg()));
+      in.seekg(0);
+      in.read(data.data(), static_cast<std::streamsize>(data.size()));
+      if (!in)
+        data.clear();
+    }
+  }
+  VkPipelineCacheCreateInfo info{};
+  info.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
+  info.initialDataSize = data.size();
+  info.pInitialData = data.empty() ? nullptr : data.data();
+  if (vkCreatePipelineCache(dev->vk, &info, nullptr, &dev->pipelineCache) !=
+      VK_SUCCESS) {
+    info.initialDataSize = 0;
+    info.pInitialData = nullptr;
+    if (vkCreatePipelineCache(dev->vk, &info, nullptr, &dev->pipelineCache) !=
+        VK_SUCCESS) {
+      dev->pipelineCache = VK_NULL_HANDLE;
+      BD_WARN("Pipeline cache unavailable, every pipeline compiles cold");
+      return;
+    }
+  }
+  BD_INFO("Pipeline cache: {} KiB loaded from {}", data.size() / 1024,
+          PipelineCachePath().string());
+}
+
+} // namespace
+
+void SavePipelineCache(VideoState &s) {
+  auto *dev = static_cast<plume::VulkanDevice *>(s.device.get());
+  if (!dev || dev->pipelineCache == VK_NULL_HANDLE)
+    return;
+  size_t size = 0;
+  if (vkGetPipelineCacheData(dev->vk, dev->pipelineCache, &size, nullptr) !=
+          VK_SUCCESS ||
+      size == 0)
+    return;
+  std::vector<char> data(size);
+  if (vkGetPipelineCacheData(dev->vk, dev->pipelineCache, &size,
+                             data.data()) != VK_SUCCESS)
+    return;
+  const auto path = PipelineCachePath();
+  std::error_code ec;
+  std::filesystem::create_directories(path.parent_path(), ec);
+  auto tmp = path;
+  tmp += ".tmp";
+  {
+    std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+    out.write(data.data(), static_cast<std::streamsize>(size));
+    if (!out)
+      return;
+  }
+  std::filesystem::rename(tmp, path, ec);
+  if (!ec)
+    BD_INFO("Pipeline cache: {} KiB saved", size / 1024);
+}
+#else
+void SavePipelineCache(VideoState &) {}
+#endif
 
 bool RecreateSwapChainLocked(VideoState &s) {
   for (u32 i = 0; i < kNumFrames; ++i) {
@@ -364,6 +443,10 @@ bool Video::CreateHostDevice(rex::ui::Window *window) {
       BD_ERROR("Plume RenderInterface::createDevice failed");
       return false;
     }
+#if defined(__ANDROID__)
+    // Before anything builds a pipeline, so all of them can use it.
+    LoadPipelineCache(s);
+#endif
     s.backend_info = DescribeBackend(s.device.get());
     // bd_msaa is clamped to the color/depth intersection. Everything
     // shader-resolves, so no hardware resolve capability is needed.
@@ -637,6 +720,7 @@ void Video::Shutdown(const std::function<void()> &ui_pump) {
   }
 
   s.ready = false;
+  SavePipelineCache(s);
 
   // Fences never signal on a removed device, and the swap chain is already
   // invalid, so flushing anything here would just hang until the watchdog.

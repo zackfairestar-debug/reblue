@@ -266,13 +266,21 @@ void Video::Present(GuestTexture *frontBuffer) {
 
   // Backgrounded Android activity: no surface to present to, so keep the
   // guest ticking at the idle rate until it comes back.
+  // The process may not come back from the background, so each trip there is
+  // when the session's pipelines are kept for the next run.
+  static bool cache_saved = false;
   if (!bd::platform::android::SurfaceAvailable()) {
+    if (!cache_saved) {
+      SavePipelineCache(s);
+      cache_saved = true;
+    }
     AbandonFrame(s, lock);
     if (lock.owns_lock())
       lock.unlock();
     PaceFrame(true);
     return;
   }
+  cache_saved = false;
   // A failed recreation leaves no swap chain, so the next frame tries again.
   if (bd::platform::android::ConsumeSurfaceChanged() ||
       (kSurfaceCanVanish && !s.swap_chain)) {

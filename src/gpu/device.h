@@ -489,6 +489,9 @@ bool BuildPresentSemaphores(VideoState &s);
 // surface. Android needs this after every return to the foreground, since the
 // old ANativeWindow is gone. Caller holds s.mutex.
 bool RecreateSwapChainLocked(VideoState &s);
+// Writes the driver's pipeline cache to disk for the next run (Android only,
+// a no-op elsewhere). Safe from any thread while the device is alive.
+void SavePipelineCache(VideoState &s);
 u32 AllocateSlot(VideoState &s);
 u32 BindTextureSRVLocked(VideoState &s, GuestTexture *tex);
 void ReleaseTextureSRVLocked(VideoState &s, GuestTexture *tex);

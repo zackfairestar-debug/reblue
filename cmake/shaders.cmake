@@ -37,6 +37,30 @@ function(reblue_host_shader STEM PROFILE)
         endif()
 
         set(out "${REBLUE_GEN_DIR}/src/gpu/shaders/hlsl/${STEM}.hlsl.${ext}.h")
+        if(ext STREQUAL "spirv" AND REBLUE_SHADERS_NO_INT64)
+            # The host shaders that include shader_common.h carry the guest
+            # shaders' 64-bit address arithmetic, so they go through the same
+            # XenosRecomp lowering before becoming a header.
+            if(REBLUE_XENOS_RECOMP)
+                set(lower_tool "${REBLUE_XENOS_RECOMP}")
+            else()
+                set(lower_tool "$<TARGET_FILE:XenosRecomp>")
+            endif()
+            set(spv "${REBLUE_GEN_DIR}/src/gpu/shaders/hlsl/${STEM}.hlsl.spv")
+            add_custom_command(
+                OUTPUT "${out}"
+                COMMAND ${REBLUE_DXC}
+                        -T ${PROFILE} -HV 2021 -all-resources-bound
+                        -Wno-ignored-attributes ${format_args}
+                        -I "${CMAKE_CURRENT_SOURCE_DIR}"
+                        -Fo "${spv}" "${REBLUE_HLSL_DIR}/${STEM}.hlsl" ${ARGN}
+                COMMAND ${lower_tool} --lower-int64-header "${spv}" "${out}"
+                        g_${STEM}_${ext}
+                DEPENDS "${REBLUE_HLSL_DIR}/${STEM}.hlsl" ${hlsl_includes}
+                        "${REBLUE_SHADER_COMMON_H}" "${lower_tool}"
+                COMMENT "Compiling ${STEM}.hlsl (${PROFILE}, ${ext}, no Int64)"
+                VERBATIM)
+        else()
         add_custom_command(
             OUTPUT "${out}"
             COMMAND ${REBLUE_DXC}
@@ -48,6 +72,7 @@ function(reblue_host_shader STEM PROFILE)
             DEPENDS "${REBLUE_HLSL_DIR}/${STEM}.hlsl" ${hlsl_includes} "${REBLUE_SHADER_COMMON_H}"
             COMMENT "Compiling ${STEM}.hlsl (${PROFILE}, ${ext})"
             VERBATIM)
+        endif()
         foreach(target IN LISTS ${target_list})
             target_sources(${target} PRIVATE "${out}")
         endforeach()
