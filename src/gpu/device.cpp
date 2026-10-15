@@ -37,6 +37,7 @@
 #include "core/memory_helpers.h"
 #include "core/settings.h"
 #include "core/shutdown.h"
+#include "gpu/backend.h"
 #include "gpu/bindless_allocator.h"
 #include "gpu/constant_buffers.h"
 #include "gpu/dred.h"
@@ -48,6 +49,7 @@
 #include "gpu/pipeline/pso_recorder.h"
 #include "gpu/settings.h"
 #include "gpu/surface_registry.h"
+#include "platform/android_lifecycle.h"
 #include "platform/platform.h"
 
 namespace plume {
@@ -112,6 +114,34 @@ bool BuildPresentSemaphores(VideoState &s) {
     s.render_semaphores.push_back(std::move(sem));
   }
   return true;
+}
+
+bool RecreateSwapChainLocked(VideoState &s) {
+  for (u32 i = 0; i < kNumFrames; ++i) {
+    if (s.command_list_submitted[i]) {
+      s.queue->waitForCommandFence(s.fences[i].get());
+      s.command_list_submitted[i] = false;
+    }
+  }
+  s.framebuffers.clear();
+  s.render_semaphores.clear();
+  s.swap_chain.reset();
+
+  plume::RenderWindow render_window{};
+  if (!bd::platform::GetNativeRenderWindow(nullptr, render_window))
+    return false;
+  plume::RenderSwapChainDesc desc(render_window, kSwapChainFormat,
+                                  kNumFrames + 1, false, kNumFrames);
+  s.swap_chain = s.queue->createSwapChain(desc);
+#if !defined(REBLUE_D3D12)
+  if (s.swap_chain)
+    s.swap_chain->resize();
+#endif
+  if (!s.swap_chain || s.swap_chain->isEmpty()) {
+    BD_ERROR("Swap chain recreation failed");
+    return false;
+  }
+  return BuildFramebuffers(s) && BuildPresentSemaphores(s);
 }
 
 plume::RenderSampleCounts Video::CvarMSAASampleCount() {
@@ -301,6 +331,7 @@ bool Video::CreateHostDevice(rex::ui::Window *window) {
   }
 
   if (!s.device) { // pre-Runtime path: no guest memory required
+    bd::platform::android::InstallLifecycleWatch();
     Output::Init(window);
     plume::RenderWindow render_window{};
     if (!bd::platform::GetNativeRenderWindow(window, render_window)) {
@@ -383,8 +414,7 @@ bool Video::CreateHostDevice(rex::ui::Window *window) {
 
     // kNumFrames + 1: a flip model swapchain needs one back buffer beyond the
     // frames in flight so acquiring N+1 never waits on scanout.
-    plume::RenderSwapChainDesc desc(render_window,
-                                    plume::RenderFormat::B8G8R8A8_UNORM,
+    plume::RenderSwapChainDesc desc(render_window, kSwapChainFormat,
                                     kNumFrames + 1, false, kNumFrames);
     s.swap_chain = s.queue->createSwapChain(desc);
 #if !defined(REBLUE_D3D12)

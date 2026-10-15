@@ -26,6 +26,7 @@
 #include "gpu/constant_buffers.h"
 #include "gpu/output.h"
 #include "gpu/settings.h"
+#include "platform/android_lifecycle.h"
 
 namespace bd::gpu {
 
@@ -38,6 +39,13 @@ void ApplyVsync(VideoState &s) {
 }
 
 constexpr i32 kIdleFPS = 30;
+
+// Only Android takes the window surface away from under a live device.
+#if defined(__ANDROID__)
+constexpr bool kSurfaceCanVanish = true;
+#else
+constexpr bool kSurfaceCanVanish = false;
+#endif
 
 void PaceFrame(bool idle = false) {
   using Clock = std::chrono::steady_clock;
@@ -230,9 +238,25 @@ void Video::Present(GuestTexture *frontBuffer) {
     return;
   }
 
+  // Backgrounded Android activity: no surface to present to, so keep the
+  // guest ticking at the idle rate until it comes back.
+  if (!bd::platform::android::SurfaceAvailable()) {
+    AbandonFrame(s, lock);
+    if (lock.owns_lock())
+      lock.unlock();
+    PaceFrame(true);
+    return;
+  }
+  // A failed recreation leaves no swap chain, so the next frame tries again.
+  if (bd::platform::android::ConsumeSurfaceChanged() ||
+      (kSurfaceCanVanish && !s.swap_chain)) {
+    SubmitOpenListLocked(s);
+    RecreateSwapChainLocked(s);
+  }
+
   const bool resize_requested =
       s.resize_requested.exchange(false, std::memory_order_acq_rel);
-  if (s.swap_chain->needsResize() || resize_requested) {
+  if (s.swap_chain && (s.swap_chain->needsResize() || resize_requested)) {
     RebuildSwapChain(s);
   }
 
@@ -342,7 +366,13 @@ void Video::PresentOverlayFrame() {
   if (s.shutting_down.load(std::memory_order_acquire))
     return;
   std::unique_lock lock(s.mutex);
-  if (!s.swap_chain || s.ready)
+  if (s.ready || !s.device || (!s.swap_chain && !kSurfaceCanVanish))
+    return;
+  if (!bd::platform::android::SurfaceAvailable())
+    return;
+  // A failed recreation leaves no swap chain, so the next frame tries again.
+  if ((bd::platform::android::ConsumeSurfaceChanged() || !s.swap_chain) &&
+      !RecreateSwapChainLocked(s))
     return;
 
   const bool resize_requested =

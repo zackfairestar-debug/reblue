@@ -485,6 +485,10 @@ bool BuildPipelineLayout(VideoState &s);
 bool BuildCopyPipeline(VideoState &s);
 bool BuildFramebuffers(VideoState &s);
 bool BuildPresentSemaphores(VideoState &s);
+// Drops the swap chain and creates it again on the window's current native
+// surface. Android needs this after every return to the foreground, since the
+// old ANativeWindow is gone. Caller holds s.mutex.
+bool RecreateSwapChainLocked(VideoState &s);
 u32 AllocateSlot(VideoState &s);
 u32 BindTextureSRVLocked(VideoState &s, GuestTexture *tex);
 void ReleaseTextureSRVLocked(VideoState &s, GuestTexture *tex);

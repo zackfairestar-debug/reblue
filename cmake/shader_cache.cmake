@@ -15,11 +15,21 @@ function(reblue_shader_cache)
     file(GLOB_RECURSE shader_inputs CONFIGURE_DEPENDS
         "${ARG_INPUT_DIR}/*.vso" "${ARG_INPUT_DIR}/*.pso" "${ARG_INPUT_DIR}/*.xex")
 
+    # REBLUE_XENOS_RECOMP names a host build of the recompiler for cross builds,
+    # which cannot run the one they would compile themselves.
+    if(REBLUE_XENOS_RECOMP)
+        set(recomp_command "${REBLUE_XENOS_RECOMP}")
+        set(recomp_depends "${REBLUE_XENOS_RECOMP}")
+    else()
+        set(recomp_command "$<TARGET_FILE:${ARG_RECOMP_TARGET}>")
+        set(recomp_depends ${ARG_RECOMP_TARGET})
+    endif()
+
     add_custom_command(
         OUTPUT "${ARG_OUTPUT_CPP}"
-        COMMAND $<TARGET_FILE:${ARG_RECOMP_TARGET}>
+        COMMAND ${recomp_command}
                 "${ARG_INPUT_DIR}" "${ARG_OUTPUT_CPP}" "${ARG_INCLUDE_FILE}"
-        DEPENDS ${ARG_RECOMP_TARGET} "${ARG_INCLUDE_FILE}" ${shader_inputs}
+        DEPENDS ${recomp_depends} "${ARG_INCLUDE_FILE}" ${shader_inputs}
         COMMENT "Recompiling Xenos shaders from ${ARG_INPUT_DIR}"
         USES_TERMINAL VERBATIM)
     add_custom_target(reblue_shader_cache_gen DEPENDS "${ARG_OUTPUT_CPP}")
@@ -28,10 +38,12 @@ function(reblue_shader_cache)
         "Directory reblue_shader_hlsl_dump writes recompiled HLSL into")
     add_custom_target(reblue_shader_hlsl_dump
         COMMAND ${CMAKE_COMMAND} -E make_directory "${REBLUE_HLSL_DUMP_DIR}"
-        COMMAND $<TARGET_FILE:${ARG_RECOMP_TARGET}>
+        COMMAND ${recomp_command}
                 "${ARG_INPUT_DIR}" "${output_dir}/shader_cache.hlsldump.cpp"
                 "${ARG_INCLUDE_FILE}" "${REBLUE_HLSL_DUMP_DIR}"
         COMMENT "Dumping recompiled HLSL to ${REBLUE_HLSL_DUMP_DIR}"
         USES_TERMINAL VERBATIM)
-    add_dependencies(reblue_shader_hlsl_dump ${ARG_RECOMP_TARGET})
+    if(NOT REBLUE_XENOS_RECOMP)
+        add_dependencies(reblue_shader_hlsl_dump ${ARG_RECOMP_TARGET})
+    endif()
 endfunction()

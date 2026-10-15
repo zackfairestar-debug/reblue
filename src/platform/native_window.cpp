@@ -144,6 +144,30 @@ bool GetNativeRenderWindow(rex::ui::Window *window, plume::RenderWindow &out) {
   return true;
 }
 
+#elif defined(__ANDROID__)
+
+bool GetNativeRenderWindow(rex::ui::Window *window, plume::RenderWindow &out) {
+  // plume's Android backend takes the ANativeWindow itself. SDL owns it, and it
+  // is replaced every time the activity returns from the background.
+  (void)window;
+  int count = 0;
+  SDL_Window **windows = SDL_GetWindows(&count);
+  SDL_Window *sdl_window = (windows && count > 0) ? windows[0] : nullptr;
+  SDL_free(windows);
+  if (!sdl_window) {
+    BD_ERROR("No SDL window available for the Vulkan surface");
+    return false;
+  }
+  out = static_cast<ANativeWindow *>(
+      SDL_GetPointerProperty(SDL_GetWindowProperties(sdl_window),
+                             SDL_PROP_WINDOW_ANDROID_WINDOW_POINTER, nullptr));
+  if (!out) {
+    BD_ERROR("SDL window has no ANativeWindow yet");
+    return false;
+  }
+  return true;
+}
+
 #else
 
 bool GetNativeRenderWindow(rex::ui::Window *window, plume::RenderWindow &out) {

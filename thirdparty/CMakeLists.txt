@@ -9,9 +9,13 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 endif()
 add_subdirectory(plume EXCLUDE_FROM_ALL)
 
-add_subdirectory(XenosRecomp EXCLUDE_FROM_ALL)
-target_compile_definitions(XenosRecomp PRIVATE REBLUE_RECOMP)
-target_precompile_headers(XenosRecomp PRIVATE <fmt/format.h>)
+# A cross build (Android) cannot run what it compiles, so XenosRecomp comes in
+# prebuilt for the host through REBLUE_XENOS_RECOMP instead.
+if(NOT REBLUE_XENOS_RECOMP)
+    add_subdirectory(XenosRecomp EXCLUDE_FROM_ALL)
+    target_compile_definitions(XenosRecomp PRIVATE REBLUE_RECOMP)
+    target_precompile_headers(XenosRecomp PRIVATE <fmt/format.h>)
+endif()
 
 if(NOT TARGET xxHash::xxhash)
     set(XXHASH_BUILD_XXHSUM OFF CACHE BOOL "" FORCE)

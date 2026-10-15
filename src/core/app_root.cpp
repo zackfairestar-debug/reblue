@@ -34,6 +34,10 @@ std::filesystem::path g_app_root_override;
 } // namespace
 
 bool IsPackagedApplication() {
+#if defined(__ANDROID__)
+  // The APK is read-only and the "executable" is app_process.
+  return true;
+#endif
 #if !defined(_WIN32)
   if (rex::platform::env::get("APPIMAGE"))
     return true;
@@ -69,6 +73,12 @@ std::filesystem::path CacheRootFor(const std::filesystem::path &root) {
 std::filesystem::path AppRootFolder() {
   if (!g_app_root_override.empty())
     return g_app_root_override;
+#if defined(__ANDROID__)
+  // The SDK's Android bridge points HOME at the app's own storage,
+  // Android/data/<package>/files, which a PC sees over USB.
+  if (auto home = rex::platform::env::get("HOME"); home && !home->empty())
+    return std::filesystem::path(*home);
+#endif
 #if !defined(_WIN32)
   // An AppImage mount is a read-only FUSE, so nothing can be written beside the
   // executable. Everything else keeps the exe dir layout.

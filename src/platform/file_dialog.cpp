@@ -16,8 +16,42 @@
 #include "core/encoding.h"
 #include "core/logging.h"
 
+#if defined(__ANDROID__)
+#include <mutex>
+#include <string_view>
+
+#include <rex/filesystem.h>
+#endif
+
 namespace bd::platform {
 namespace {
+
+#if defined(__ANDROID__)
+// The system picker answers with content:// URIs, which nothing downstream
+// (std::ifstream, the disc reader's mmap) can open. The descriptor the
+// ContentResolver hands back stays open for the life of the process, and
+// /proc/self/fd/N reopens the file behind it as an ordinary path.
+std::filesystem::path ResolvePickedPath(std::string_view picked) {
+  if (!rex::filesystem::IsAndroidContentUri(picked))
+    return std::filesystem::path(picked);
+  const int fd = rex::filesystem::OpenAndroidContentFileDescriptor(picked, "r");
+  if (fd < 0) {
+    BD_WARN("Could not open the picked document {}", picked);
+    return {};
+  }
+  static std::mutex mutex;
+  static std::vector<int> held;
+  {
+    std::lock_guard lock(mutex);
+    held.push_back(fd);
+  }
+  return std::filesystem::path("/proc/self/fd") / std::to_string(fd);
+}
+#else
+std::filesystem::path ResolvePickedPath(std::string_view picked) {
+  return std::filesystem::path(picked);
+}
+#endif
 
 struct DialogResult {
   std::atomic<bool> done{false};
@@ -33,8 +67,11 @@ void SDLCALL DialogCallback(void *userdata, const char *const *filelist,
     // zenity, etc.), distinct from user cancel.
     result->error_message = SDL_GetError();
   } else {
-    for (const char *const *it = filelist; *it != nullptr; ++it)
-      result->paths.emplace_back(*it);
+    for (const char *const *it = filelist; *it != nullptr; ++it) {
+      auto path = ResolvePickedPath(*it);
+      if (!path.empty())
+        result->paths.push_back(std::move(path));
+    }
   }
   result->done.store(true, std::memory_order_release);
 }
@@ -137,6 +174,13 @@ ShowOpenFilesDialog(const wchar_t *title, std::span<const FileFilter> filters) {
 
 std::optional<std::filesystem::path>
 ShowOpenFolderDialog(const wchar_t *title) {
+#if defined(__ANDROID__)
+  // A document tree is not a directory the installer can write into. The
+  // install stays in the app's own storage (bd::AppRootFolder()).
+  (void)title;
+  BD_INFO("Folder picking is not available on Android, keeping app storage");
+  return std::nullopt;
+#endif
   auto paths = RunDialog(title, /*pick_folder=*/true, /*many=*/false, {});
   if (paths.empty())
     return std::nullopt;

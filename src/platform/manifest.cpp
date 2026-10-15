@@ -121,6 +121,9 @@ std::string_view AppManifest::PlatformKey() {
 #else
   return "mac-amd64";
 #endif
+#elif defined(__ANDROID__)
+  // No artifact is published under this key, so Android never offers updates.
+  return "android-arm64";
 #elif defined(__aarch64__)
   return "linux-arm64";
 #else

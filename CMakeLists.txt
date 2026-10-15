@@ -49,14 +49,37 @@ set(REBLUE_PROFILING_ON
     "$<AND:$<BOOL:${REBLUE_PROFILING}>,$<NOT:$<CONFIG:Release>>>")
 
 include(generated/rexglue.cmake)
+# A cross build (Android) cannot run the rexglue it imports, so codegen runs a
+# host build of the same SDK version instead. generated/rexglue.cmake is
+# rewritten by every codegen run, so the swap happens here on the imported
+# target rather than in its custom command.
+set(REXGLUE_CODEGEN_EXECUTABLE "" CACHE FILEPATH
+    "Host rexglue executable for codegen in cross builds")
+if(REXGLUE_CODEGEN_EXECUTABLE)
+    get_target_property(_rexglue_imported rex::rexglue IMPORTED)
+    if(NOT _rexglue_imported)
+        message(FATAL_ERROR "REXGLUE_CODEGEN_EXECUTABLE needs an installed SDK "
+                            "(CMAKE_PREFIX_PATH), not REXSDK_DIR")
+    endif()
+    set_target_properties(rex::rexglue PROPERTIES
+        IMPORTED_LOCATION "${REXGLUE_CODEGEN_EXECUTABLE}"
+        IMPORTED_LOCATION_RELEASE "${REXGLUE_CODEGEN_EXECUTABLE}"
+        IMPORTED_LOCATION_RELWITHDEBINFO "${REXGLUE_CODEGEN_EXECUTABLE}"
+        IMPORTED_LOCATION_DEBUG "${REXGLUE_CODEGEN_EXECUTABLE}")
+endif()
 if(WIN32)
     find_package(directx-dxc CONFIG REQUIRED)
 endif()
 add_subdirectory(thirdparty)
 
 foreach(target IN LISTS REBLUE_TARGETS)
-    add_executable(${target})
-    set_target_properties(${target} PROPERTIES WIN32_EXECUTABLE ON)
+    if(ANDROID)
+        # SDLActivity loads libreblue.so and calls its SDL_main.
+        add_library(${target} SHARED)
+    else()
+        add_executable(${target})
+        set_target_properties(${target} PROPERTIES WIN32_EXECUTABLE ON)
+    endif()
 endforeach()
 
 # OBJECT and never STATIC: an archive drops the REX_HOOK symbols.
@@ -244,6 +267,10 @@ foreach(target IN LISTS REBLUE_VULKAN_TARGETS)
             "-framework IOKit"
             "-framework IOSurface"
             "-framework CoreGraphics")
+    elseif(ANDROID)
+        # plume creates the surface from the ANativeWindow and reaches the
+        # system libvulkan through volk.
+        target_link_libraries(${target} PRIVATE android log)
     else()
         # plume builds the surface through SDL3, which dlopen's the X11 or Wayland
         # client libraries itself, so nothing here links a window system.

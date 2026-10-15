@@ -23,6 +23,15 @@
 
 #if defined(_WIN32)
 #include "core/windows_lean.h"
+#elif defined(__ANDROID__)
+#include <jni.h>
+
+#include <SDL3/SDL_system.h>
+
+#include <cerrno>
+#include <fcntl.h>
+#include <sys/file.h>
+#include <unistd.h>
 #else
 #include <cerrno>
 #include <fcntl.h>
@@ -117,6 +126,38 @@ bool SpawnProcess(const std::filesystem::path &exe, bool repair) {
   ::CloseHandle(pi.hThread);
   ::CloseHandle(pi.hProcess);
   return true;
+}
+#elif defined(__ANDROID__)
+// An app cannot exec itself: ReblueActivity.scheduleRestart arms an alarm that
+// relaunches the activity with these arguments once this process has exited.
+bool SpawnProcess(const std::filesystem::path &exe, bool repair) {
+  (void)exe;
+  auto *env = static_cast<JNIEnv *>(SDL_GetAndroidJNIEnv());
+  auto activity = static_cast<jobject>(SDL_GetAndroidActivity());
+  if (!env || !activity) {
+    BD_ERROR("[reboot] no Android activity to relaunch through");
+    return false;
+  }
+  jclass cls = env->GetObjectClass(activity);
+  jmethodID schedule =
+      env->GetMethodID(cls, "scheduleRestart", "(Ljava/lang/String;Z)Z");
+  bool ok = false;
+  if (schedule) {
+    jstring profile = env->NewStringUTF(g_active_profile.c_str());
+    ok = env->CallBooleanMethod(activity, schedule, profile,
+                                static_cast<jboolean>(repair));
+    env->DeleteLocalRef(profile);
+  }
+  if (env->ExceptionCheck()) {
+    env->ExceptionDescribe();
+    env->ExceptionClear();
+    ok = false;
+  }
+  env->DeleteLocalRef(cls);
+  env->DeleteLocalRef(activity);
+  if (!ok)
+    BD_ERROR("[reboot] ReblueActivity.scheduleRestart failed");
+  return ok;
 }
 #else
 bool SpawnProcess(const std::filesystem::path &exe, bool repair) {
