@@ -11,7 +11,9 @@
  */
 #include "gpu/pipeline/pipeline_cache.h"
 
+#include <format>
 #include <memory>
+#include <string>
 #include <mutex>
 #include <unordered_map>
 
@@ -247,12 +249,23 @@ std::unique_ptr<plume::RenderPipeline> Build(const PipelineState &state) {
   desc.inputSlots = inputSlots;
   desc.inputSlotsCount = inputSlotCount;
 
+  // The shader hashes ride in the tag, so a pipeline the driver rejects names
+  // the shaders it was built from.
+  const std::string tag = std::format(
+      "pipeline vs={:016X} ps={:016X}",
+      state.vertexShader && state.vertexShader->shaderCacheEntry
+          ? state.vertexShader->shaderCacheEntry->hash
+          : 0ull,
+      state.pixelShader && state.pixelShader->shaderCacheEntry
+          ? state.pixelShader->shaderCacheEntry->hash
+          : 0ull);
+
 #if defined(REBLUE_D3D12)
   // Spec constants are baked by the DXC linker in GetOrLinkShader, not the PSO.
   desc.specConstants = nullptr;
   desc.specConstantsCount = 0;
 
-  return CreateHostGraphicsPipeline(device, desc, "pipeline");
+  return CreateHostGraphicsPipeline(device, desc, tag.c_str());
 #else
   // SPIR-V keeps g_SpecConstants as Vulkan specialization constant id 0
   // as the recompiler emits it, so supply the masked value per pipeline. The
@@ -275,7 +288,7 @@ std::unique_ptr<plume::RenderPipeline> Build(const PipelineState &state) {
     desc.specConstantsCount = 0;
   }
 
-  return CreateHostGraphicsPipeline(device, desc, "pipeline");
+  return CreateHostGraphicsPipeline(device, desc, tag.c_str());
 #endif
 }
 

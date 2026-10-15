@@ -11,6 +11,7 @@
  */
 #include "gpu/frame.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <mutex>
@@ -68,6 +69,31 @@ void PaceFrame(bool idle = false) {
   } else {
     next = now + period;
   }
+}
+
+// One log line every kPerfWindow with the presented frame rate and the worst
+// frame, so a slow device leaves numbers behind instead of an impression.
+void LogFrameRate() {
+  using Clock = std::chrono::steady_clock;
+  constexpr auto kPerfWindow = std::chrono::seconds(10);
+  static Clock::time_point window_start = Clock::now();
+  static Clock::time_point last = window_start;
+  static u32 frames = 0;
+  static double worst_ms = 0.0;
+  const auto now = Clock::now();
+  worst_ms = std::max(
+      worst_ms, std::chrono::duration<double, std::milli>(now - last).count());
+  last = now;
+  ++frames;
+  if (now - window_start < kPerfWindow)
+    return;
+  const double seconds =
+      std::chrono::duration<double>(now - window_start).count();
+  BD_INFO("[perf] {:.1f} fps over {:.0f}s, worst frame {:.1f} ms",
+          frames / seconds, seconds, worst_ms);
+  window_start = now;
+  frames = 0;
+  worst_ms = 0.0;
 }
 
 void AbandonFrame(VideoState &s, std::unique_lock<std::mutex> &lock) {
@@ -337,6 +363,7 @@ void Video::Present(GuestTexture *frontBuffer) {
   const u32 reclaimed = s.frame.load(std::memory_order_relaxed);
   s.frame_present_committed = true;
   BD_FRAME_MARK();
+  LogFrameRate();
   Video::SyncBackBufferSizeLocked();
   lock.unlock();
   {

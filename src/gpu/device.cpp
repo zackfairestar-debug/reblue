@@ -429,6 +429,11 @@ bool Video::CreateHostDevice(rex::ui::Window *window) {
               bool(f.shaderStorageImageWriteWithoutFormat));
     }
 #endif
+    BD_INFO("Graphics: ssaa={}x msaa={}x shadows={} (distance {:.1f}) "
+            "anisotropy={} vsync={}",
+            Settings::Get().SuperSampling(), Settings::Get().MSAA(),
+            Settings::Get().ShadowDimension(), Settings::Get().ShadowDistance(),
+            Settings::Get().Anisotropy(), Settings::Get().Vsync());
 
     // kNumFrames + 1: a flip model swapchain needs one back buffer beyond the
     // frames in flight so acquiring N+1 never waits on scanout.
@@ -852,6 +857,81 @@ CreateHostTexture(plume::RenderDevice *device,
   return texture;
 }
 
+#if !defined(REBLUE_D3D12)
+namespace {
+
+bool PipelineCreated(const std::unique_ptr<plume::RenderPipeline> &pipeline) {
+  return pipeline &&
+         static_cast<plume::VulkanGraphicsPipeline *>(pipeline.get())->vk !=
+             VK_NULL_HANDLE;
+}
+
+// Mobile drivers reject some pipelines desktop ones accept, and only say
+// VK_ERROR_UNKNOWN. Rebuild the rejected desc with one piece of fixed-function
+// state relaxed at a time: the first that the driver takes both names the
+// culprit in the log and stands in for the original, slightly off rather than
+// missing entirely.
+std::unique_ptr<plume::RenderPipeline>
+TryPipelineFallbacks(plume::RenderDevice *device,
+                     const plume::RenderGraphicsPipelineDesc &desc) {
+  using Desc = plume::RenderGraphicsPipelineDesc;
+  struct Variant {
+    const char *name;
+    void (*apply)(Desc &);
+  };
+  static const Variant kVariants[] = {
+      {"solid fill",
+       [](Desc &d) { d.fillMode = plume::RenderFillMode::SOLID; }},
+      {"no blend",
+       [](Desc &d) { d.renderTargetBlend[0].blendEnabled = false; }},
+      {"full write mask",
+       [](Desc &d) { d.renderTargetBlend[0].renderTargetWriteMask = 0xF; }},
+      {"no alpha to coverage",
+       [](Desc &d) { d.alphaToCoverageEnabled = false; }},
+      {"no depth bias",
+       [](Desc &d) {
+         d.depthBias = 0;
+         d.slopeScaledDepthBias = 0.0f;
+         d.depthBiasClamp = 0.0f;
+       }},
+      {"no stencil", [](Desc &d) { d.stencilEnabled = false; }},
+      {"no depth test",
+       [](Desc &d) {
+         d.depthEnabled = false;
+         d.depthWriteEnabled = false;
+       }},
+      {"no cull", [](Desc &d) { d.cullMode = plume::RenderCullMode::NONE; }},
+      {"no spec constants",
+       [](Desc &d) {
+         d.specConstants = nullptr;
+         d.specConstantsCount = 0;
+       }},
+  };
+  for (const auto &variant : kVariants) {
+    Desc relaxed = desc;
+    variant.apply(relaxed);
+    auto pipeline = device->createGraphicsPipeline(relaxed);
+    if (PipelineCreated(pipeline)) {
+      BD_WARN("  driver accepts it with '{}', using that", variant.name);
+      return pipeline;
+    }
+  }
+  Desc relaxed = desc;
+  for (const auto &variant : kVariants)
+    variant.apply(relaxed);
+  auto pipeline = device->createGraphicsPipeline(relaxed);
+  if (PipelineCreated(pipeline)) {
+    BD_WARN("  driver accepts it only with every relaxation, using that");
+    return pipeline;
+  }
+  BD_ERROR("  no fixed-function relaxation helps: the shaders themselves are "
+           "rejected");
+  return nullptr;
+}
+
+} // namespace
+#endif
+
 std::unique_ptr<plume::RenderPipeline>
 CreateHostGraphicsPipeline(plume::RenderDevice *device,
                            const plume::RenderGraphicsPipelineDesc &desc,
@@ -891,6 +971,7 @@ CreateHostGraphicsPipeline(plume::RenderDevice *device,
       for (u32 i = 0; i < desc.inputElementsCount; ++i)
         inputs += std::format("{}{}", i ? "," : "",
                               static_cast<u32>(desc.inputElements[i].format));
+      const auto &blend = desc.renderTargetBlend[0];
       BD_ERROR("  vs={} ps={} rt={}x{} depth={} samples={} spec={} "
                "topology={} inputs=[{}]",
                module_ok(desc.vertexShader), module_ok(desc.pixelShader),
@@ -900,7 +981,22 @@ CreateHostGraphicsPipeline(plume::RenderDevice *device,
                static_cast<u32>(desc.multisampling.sampleCount),
                desc.specConstantsCount,
                static_cast<u32>(desc.primitiveTopology), inputs);
+      BD_ERROR("  fill={} cull={} blend={} ({}/{}/{} a {}/{}/{}) mask=0x{:X} "
+               "a2c={} depth test={} write={} func={} stencil={} bias={}/{}",
+               static_cast<u32>(desc.fillMode),
+               static_cast<u32>(desc.cullMode), blend.blendEnabled,
+               static_cast<u32>(blend.srcBlend), static_cast<u32>(blend.dstBlend),
+               static_cast<u32>(blend.blendOp),
+               static_cast<u32>(blend.srcBlendAlpha),
+               static_cast<u32>(blend.dstBlendAlpha),
+               static_cast<u32>(blend.blendOpAlpha),
+               blend.renderTargetWriteMask, desc.alphaToCoverageEnabled,
+               desc.depthEnabled, desc.depthWriteEnabled,
+               static_cast<u32>(desc.depthFunction), desc.stencilEnabled,
+               desc.depthBias, desc.slopeScaledDepthBias);
     }
+    if (auto fallback = TryPipelineFallbacks(device, desc))
+      return fallback;
 #endif
     CheckDeviceRemoved(tag ? tag : "pipeline");
     return nullptr;
