@@ -89,14 +89,23 @@ struct PresetBundle {
   ReflectionQuality reflectionQuality;
 };
 
+// What "on" means for anisotropic filtering. Phone GPUs pay for every extra
+// tap in texture bandwidth, and 4x keeps most of the sharpness on the ground
+// at a fraction of 16x's cost there.
+#if defined(__ANDROID__)
+inline constexpr i32 kAnisotropyOn = 4;
+#else
+inline constexpr i32 kAnisotropyOn = 16;
+#endif
+
 inline constexpr PresetBundle kPresets[kQualityPresetCount] = {
-    /* Low    */ {1, 0, 16, 1.0, 1024, PostQuality::Low,
+    /* Low    */ {1, 0, kAnisotropyOn, 1.0, 1024, PostQuality::Low,
                   ReflectionQuality::Low},
-    /* Medium */ {1, 4, 16, 2.0, 4096, PostQuality::Medium,
+    /* Medium */ {1, 4, kAnisotropyOn, 2.0, 4096, PostQuality::Medium,
                   ReflectionQuality::Medium},
-    /* High   */ {2, 4, 16, 2.0, 4096, PostQuality::High,
+    /* High   */ {2, 4, kAnisotropyOn, 2.0, 4096, PostQuality::High,
                   ReflectionQuality::High},
-    /* Ultra  */ {2, 8, 16, 4.0, 8192, PostQuality::High,
+    /* Ultra  */ {2, 8, kAnisotropyOn, 4.0, 8192, PostQuality::High,
                   ReflectionQuality::High},
 };
 

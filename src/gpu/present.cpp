@@ -14,10 +14,14 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <format>
 #include <mutex>
 #include <thread>
 
 #include <plume_render_interface.h>
+#if !defined(REBLUE_D3D12)
+#include <plume_vulkan.h>
+#endif
 
 #include "gpu/gpu_profiling.h"
 
@@ -28,6 +32,7 @@
 #include "gpu/output.h"
 #include "gpu/settings.h"
 #include "platform/android_lifecycle.h"
+#include "platform/android_perf.h"
 
 namespace bd::gpu {
 
@@ -77,8 +82,20 @@ void PaceFrame(bool idle = false) {
 // is the guest and the draw recording on the CPU.
 struct FrameWaits {
   double acquire_ms = 0, gpu_ms = 0, present_ms = 0;
+  // The fps cap's sleep (and the 30 fps one during FMVs), which is not CPU
+  // work either.
+  double pace_ms = 0;
 };
 FrameWaits g_waits;
+
+double TotalWaitsMs() {
+  return g_waits.acquire_ms + g_waits.gpu_ms + g_waits.present_ms;
+}
+
+// When the current frame's work began: the end of the previous frame's pacing
+// sleep. Zero until a frame has been presented, and again after the
+// background, so the first frame back does not report the whole trip.
+std::chrono::steady_clock::time_point g_frame_begin{};
 
 class WaitTimer {
 public:
@@ -94,6 +111,22 @@ private:
   double &sum_;
   std::chrono::steady_clock::time_point start_;
 };
+
+// How many render passes the frames began and the pixels they covered: on a
+// tiler every pass loads and stores its attachments, so this is the memory
+// traffic the GPU pays before it shades anything.
+std::string PassSummary(u32 frames) {
+#if defined(REBLUE_D3D12)
+  (void)frames;
+  return {};
+#else
+  const plume::VulkanPassStats stats = plume::takeVulkanPassStats();
+  return std::format(" | per frame {:.0f} passes, {:.1f} Mpix, {:.0f} draws",
+                     double(stats.passes) / frames,
+                     double(stats.pixels) / frames / 1e6,
+                     double(stats.draws) / frames);
+#endif
+}
 
 // One log line every kPerfWindow with the presented frame rate and the worst
 // frame, so a slow device leaves numbers behind instead of an impression.
@@ -117,12 +150,24 @@ void LogFrameRate() {
   const double acquire = g_waits.acquire_ms / frames;
   const double gpu = g_waits.gpu_ms / frames;
   const double present = g_waits.present_ms / frames;
+  const double pace = g_waits.pace_ms / frames;
+  // The GPU's own time per frame from the timestamps. Next to cpu it says
+  // whether the two overlap (frame ~ max of them) or run back to back
+  // (frame ~ their sum).
+  auto &s = state();
+  const double gpu_busy =
+      s.gpu_busy_frames ? s.gpu_busy_ms / s.gpu_busy_frames : 0.0;
+  s.gpu_busy_ms = 0.0;
+  s.gpu_busy_frames = 0;
   BD_INFO("[perf] {:.1f} fps over {:.0f}s, worst frame {:.1f} ms | per frame "
-          "{:.1f} ms: cpu {:.1f}, gpu wait {:.1f}, image wait {:.1f}, "
-          "present {:.1f} (fps cap {}, vsync {})",
+          "{:.1f} ms: cpu {:.1f}, gpu busy {:.1f}, gpu wait {:.1f}, image "
+          "wait {:.1f}, present {:.1f}, pacing {:.1f} (fps cap {}, vsync "
+          "{}){}{}",
           frames / seconds, seconds, worst_ms, frame_ms,
-          frame_ms - acquire - gpu - present, gpu, acquire, present,
-          bd::engine::Settings::Get().FPSLimit(), Settings::Get().Vsync());
+          frame_ms - acquire - gpu - present - pace, gpu_busy, gpu, acquire,
+          present, pace,
+          bd::engine::Settings::Get().FPSLimit(), Settings::Get().Vsync(),
+          PassSummary(frames), bd::platform::android::ThermalSummary());
   g_waits = {};
   window_start = now;
   frames = 0;
@@ -155,6 +200,7 @@ void RebuildSwapChain(VideoState &s) {
       BD_ERROR("Swap chain resize failed");
     return;
   }
+  LogSwapChain(s);
   if (static_cast<AspectMode>(Settings::Get().AspectRatio()) ==
       AspectMode::Auto)
     Output::Recompute();
@@ -307,6 +353,7 @@ void Video::Present(GuestTexture *frontBuffer) {
       SavePipelineCache(s);
       cache_saved = true;
     }
+    g_frame_begin = {};
     AbandonFrame(s, lock);
     if (lock.owns_lock())
       lock.unlock();
@@ -335,6 +382,7 @@ void Video::Present(GuestTexture *frontBuffer) {
     return;
   }
 
+  const double waits_before = TotalWaitsMs();
   u32 texture_index = 0;
   {
     BD_CPU_ZONE("AcquireTexture");
@@ -377,6 +425,11 @@ void Video::Present(GuestTexture *frontBuffer) {
   RecordPresentPass(s, rt, back, back_fb);
 
   const u32 cur = s.frame.load(std::memory_order_relaxed);
+  if (s.gpu_timer_started[cur]) {
+    s.command_list->writeTimestamp(s.gpu_timers[cur].get(), 1);
+    s.gpu_timer_started[cur] = false;
+    s.gpu_timer_pending[cur] = true;
+  }
   s.command_lists[cur]->end();
   s.command_list_open = false;
 
@@ -404,6 +457,7 @@ void Video::Present(GuestTexture *frontBuffer) {
     WaitTimer timer(g_waits.gpu_ms);
     AdvanceAndWaitReused(s);
   }
+  const double frame_waits_ms = TotalWaitsMs() - waits_before;
   const u32 reclaimed = s.frame.load(std::memory_order_relaxed);
   s.frame_present_committed = true;
   BD_FRAME_MARK();
@@ -414,10 +468,23 @@ void Video::Present(GuestTexture *frontBuffer) {
     BD_CPU_ZONE("DrainSlot");
     DrainSlot(s, reclaimed);
   }
+  // The guest and the draw recording, without the waits on the swap chain and
+  // the GPU: what the CPU governor has to keep up with.
+  if (g_frame_begin.time_since_epoch().count() != 0) {
+    const auto work =
+        std::chrono::steady_clock::now() - g_frame_begin -
+        std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::duration<double, std::milli>(frame_waits_ms));
+    bd::platform::android::ReportFrameWork(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(work),
+        bd::engine::Settings::Get().FPSLimit());
+  }
   {
     BD_CPU_ZONE("PaceFrame");
+    WaitTimer timer(g_waits.pace_ms);
     PaceFrame();
   }
+  g_frame_begin = std::chrono::steady_clock::now();
 }
 
 void Video::SkipPresent() {

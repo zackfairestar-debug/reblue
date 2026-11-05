@@ -45,6 +45,12 @@ void BeginCommandList(VideoState &s) {
   s.draw_framebuffer_bound = false;
   s.last_resolved_dst = nullptr;
   s.command_list->begin();
+  if (s.gpu_timers[cur]) {
+    s.command_list->resetQueryPool(s.gpu_timers[cur].get(), 0, 2);
+    s.command_list->writeTimestamp(s.gpu_timers[cur].get(), 0);
+    s.gpu_timer_started[cur] = true;
+    s.gpu_timer_pending[cur] = false;
+  }
   if (!s.null_texture_barriers_submitted) {
     plume::RenderTextureBarrier barriers[kNullTextureDescriptorCount];
     for (u32 i = 0; i < kNullTextureDescriptorCount; ++i) {
@@ -232,6 +238,17 @@ void AdvanceAndWaitReused(VideoState &s) {
       TracyD3D12Collect(ctx);
     }
 #endif
+  }
+  // Whoever awaited the fence, the slot's work is done by now.
+  if (s.gpu_timer_pending[slot] && !s.command_list_submitted[slot]) {
+    s.gpu_timer_pending[slot] = false;
+    plume::RenderQueryPool *timer = s.gpu_timers[slot].get();
+    timer->queryResults();
+    const u64 *ns = timer->getResults();
+    if (ns[1] > ns[0]) {
+      s.gpu_busy_ms += double(ns[1] - ns[0]) / 1e6;
+      ++s.gpu_busy_frames;
+    }
   }
   ResetFrame(slot);
 }

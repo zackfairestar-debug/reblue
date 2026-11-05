@@ -43,6 +43,18 @@ bool RubyHidden() { return i18n::CurrentLocale() != engine::kLocaleJP; }
 // bd_boot.ini's [Voice] list gives it something to choose between.
 bool VoiceLanguageHidden() { return engine::Language().VoiceCount() < 2; }
 
+// Android owns the window: the app is always full screen on the one display,
+// there are no display modes to switch to, and toggling fullscreen there only
+// rebuilds the surface and the swap chain, stalling the game for a second or
+// more.
+bool WindowRowsHidden() {
+#if defined(__ANDROID__)
+  return true;
+#else
+  return false;
+#endif
+}
+
 double DisplayModeNum() {
   if (rex::cvar::GetFlagByName("fullscreen") != "true")
     return 0.0;
@@ -229,8 +241,8 @@ constexpr SettingOption kSuperSampling[] = {
     {.text = "Off", .num = 1, .key = "opt.off"},
     {.text = "On", .num = 2, .key = "opt.on"}};
 // bd_anisotropy keeps its 0..16 range for anyone who wants a middle step, but
-// the menus offer the two ends of it.
-constexpr i32 kAnisotropyOn = 16;
+// the menus offer off and the platform's full level.
+constexpr i32 kAnisotropyOn = gpu::kAnisotropyOn;
 constexpr SettingOption kAniso[] = {
     {.text = "Off", .num = 0, .key = "opt.off"},
     {.text = "On", .num = kAnisotropyOn, .key = "opt.on"}};
@@ -497,12 +509,14 @@ constexpr SettingRow kDisplaySettings[] = {
                  .cvar = "fullscreen",
                  .cvar2 = "fullscreen_exclusive"},
      .options = kDisplayMode,
-     .count = OptCount(kDisplayMode)},
+     .count = OptCount(kDisplayMode),
+     .hidden = WindowRowsHidden},
     {.label = "settings.display.monitor.label",
      .group = "menu.header.window",
      .binding = {.cvar = "monitor"},
      .sliderUi = true,
-     .special = SettingSpecial::Monitor},
+     .special = SettingSpecial::Monitor,
+     .hidden = WindowRowsHidden},
     {.label = "settings.display.resolution.label",
      .group = "menu.header.window",
      .binding = {.get = RenderResolutionNum, .setText = SetRenderResolution},
@@ -515,7 +529,8 @@ constexpr SettingRow kDisplaySettings[] = {
      .options = kWindowSize,
      .count = OptCount(kWindowSize),
      .sliderUi = true,
-     .windowedGated = true},
+     .windowedGated = true,
+     .hidden = WindowRowsHidden},
     {.label = "settings.display.aspect_ratio.label",
      .group = "menu.header.window",
      .binding = {

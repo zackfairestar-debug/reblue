@@ -402,6 +402,14 @@ struct VideoState {
   bool command_list_open = false;
   bool command_list_submitted[kNumFrames] =
       {}; // per-slot: submitted, fence not yet awaited at reuse
+  // Timestamps at the start and end of each slot's frame, read back once the
+  // slot's fence has passed, so the [perf] line carries the GPU's own time
+  // instead of only the waits that hint at it.
+  std::unique_ptr<plume::RenderQueryPool> gpu_timers[kNumFrames];
+  bool gpu_timer_started[kNumFrames] = {};
+  bool gpu_timer_pending[kNumFrames] = {};
+  double gpu_busy_ms = 0.0; // summed since the last [perf] line
+  u32 gpu_busy_frames = 0;
 
   bool draw_framebuffer_bound = false;
   GuestTexture *bound_fb_rt = nullptr;
@@ -492,6 +500,10 @@ bool RecreateSwapChainLocked(VideoState &s);
 // Writes the driver's pipeline cache to disk for the next run (Android only,
 // a no-op elsewhere). Safe from any thread while the device is alive.
 void SavePipelineCache(VideoState &s);
+// Logs the swap chain's size, image count and the present mode the driver
+// actually got, whenever one of them changes (Android only, a no-op
+// elsewhere). Caller holds s.mutex.
+void LogSwapChain(VideoState &s);
 u32 AllocateSlot(VideoState &s);
 u32 BindTextureSRVLocked(VideoState &s, GuestTexture *tex);
 void ReleaseTextureSRVLocked(VideoState &s, GuestTexture *tex);

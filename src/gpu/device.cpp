@@ -191,8 +191,36 @@ void SavePipelineCache(VideoState &s) {
   if (!ec)
     BD_INFO("Pipeline cache: {} KiB saved", size / 1024);
 }
+
+// "vsync false" only means something once the present mode says so: Android
+// has no IMMEDIATE, and FIFO would snap every long frame to the next vblank.
+void LogSwapChain(VideoState &s) {
+  auto *sc = static_cast<plume::VulkanSwapChain *>(s.swap_chain.get());
+  if (!sc || sc->isEmpty())
+    return;
+  static VkPresentModeKHR last_mode = VK_PRESENT_MODE_MAX_ENUM_KHR;
+  static u32 last_w = 0, last_h = 0, last_count = 0;
+  const VkPresentModeKHR mode = sc->createdPresentMode;
+  const u32 w = sc->getWidth(), h = sc->getHeight();
+  const u32 count = sc->getTextureCount();
+  if (mode == last_mode && w == last_w && h == last_h && count == last_count)
+    return;
+  last_mode = mode;
+  last_w = w;
+  last_h = h;
+  last_count = count;
+  const char *name = mode == VK_PRESENT_MODE_IMMEDIATE_KHR ? "immediate"
+                     : mode == VK_PRESENT_MODE_MAILBOX_KHR ? "mailbox"
+                     : mode == VK_PRESENT_MODE_FIFO_KHR    ? "fifo"
+                                                           : "other";
+  BD_INFO("Swap chain: {}x{}, {} images, present mode {} (mailbox {}, "
+          "immediate {})",
+          w, h, count, name, sc->mailboxPresentModeSupported,
+          sc->immediatePresentModeSupported);
+}
 #else
 void SavePipelineCache(VideoState &) {}
+void LogSwapChain(VideoState &) {}
 #endif
 
 bool RecreateSwapChainLocked(VideoState &s) {
@@ -220,6 +248,7 @@ bool RecreateSwapChainLocked(VideoState &s) {
     BD_ERROR("Swap chain recreation failed");
     return false;
   }
+  LogSwapChain(s);
   return BuildFramebuffers(s) && BuildPresentSemaphores(s);
 }
 
@@ -467,6 +496,7 @@ bool Video::CreateHostDevice(rex::ui::Window *window) {
       s.command_lists[i] = s.queue->createCommandList();
       s.fences[i] = s.device->createCommandFence();
       s.acquire_semaphores[i] = s.device->createCommandSemaphore();
+      s.gpu_timers[i] = s.device->createQueryPool(2);
     }
     s.command_list = s.command_lists[0].get(); // recording alias -> slot 0
     [[maybe_unused]] const bool dred_breadcrumbs = PrepareDredCommandObjects();
@@ -535,6 +565,7 @@ bool Video::CreateHostDevice(rex::ui::Window *window) {
       BD_ERROR("Plume createSwapChain failed");
       return false;
     }
+    LogSwapChain(s);
     if (!BuildFramebuffers(s)) {
       return false;
     }
