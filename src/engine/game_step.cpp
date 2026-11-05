@@ -15,6 +15,7 @@
 #include "engine/frame_interp.h"
 #include "engine/hud_fade.h"
 #include "engine/input/dispatch.h"
+#include "platform/android_companion.h"
 
 REX_EXTERN(__imp__bdMainGameStep);
 REX_HOOK_RAW(bdMainGameStep) {
@@ -24,4 +25,7 @@ REX_HOOK_RAW(bdMainGameStep) {
   bd::engine::CutscenePause::Get().Poll();
   __imp__bdMainGameStep(ctx, base);
   bd::engine::RunDispatch();
+  // The battle manager handle is only trusted inside the step that captured
+  // it, so the dual-screen panel samples here, before the next step resets it.
+  bd::platform::android::CompanionSample();
 }
