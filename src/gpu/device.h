@@ -304,12 +304,13 @@ struct VideoState {
   //   helper
   //               block, whose layout matches the shared PushConstants block.
   // Vulkan:
-  //   push  0   : bytes [0,40), VERTEX|PIXEL. [0,24) = VS/PS/Shared
-  //               constant buffer device addresses, read by the guest
-  //               shaders' [[vk::push_constant]] block via vk::RawBufferLoad,
-  //               and [24,40) = the copy/resolve helper block.
+  //   push  0   : bytes [0,40), VERTEX|PIXEL. [0,24) is unused (the guest
+  //               constants left it for set 5), [24,40) = the copy/resolve
+  //               helper block.
   //   slot 4    : occlusion counter UAV (per-frame set, bound only for the
   //               occlusion count draw).
+  //   slot 5    : VS/PS/Shared constants, dynamic uniform buffers into the
+  //               upload chunk (draw.cpp BindGuestConstants).
   std::unique_ptr<plume::RenderPipelineLayout> pipeline_layout;
   std::unique_ptr<plume::RenderPipeline> copy_color_pipeline;
   std::unique_ptr<plume::RenderPipeline> gamma_correction_pipeline;
