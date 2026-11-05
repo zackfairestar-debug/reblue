@@ -6,7 +6,7 @@
 
 #ifdef __spirv__
 
-#define g_vParam vk::RawBufferLoad<float4>(g_PushConstants.PixelShaderConstants + 432, 0x10)
+#define g_vParam REBLUE_PSC(432)
 
 #else
 

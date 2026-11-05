@@ -17,6 +17,7 @@
 #include "core/logging.h"
 #include "gpu/backend.h"
 #include "gpu/bindless_allocator.h"
+#include "gpu/constant_buffers.h"
 #include "gpu/format.h"
 #include "gpu/settings.h"
 
@@ -224,6 +225,11 @@ bool BuildPipelineLayout(VideoState &s) {
     }
   }
   layout_builder.addDescriptorSet(occlusion_set_builder);
+
+  // Guest constants, set 5: dynamic uniform buffers into the upload chunks.
+  plume::RenderDescriptorSetBuilder constant_set_builder;
+  DescribeGuestConstantSet(constant_set_builder);
+  layout_builder.addDescriptorSet(constant_set_builder);
 #endif
 
   layout_builder.end();

@@ -6,9 +6,9 @@
 
 #ifdef __spirv__
 
-#define g_vCount vk::RawBufferLoad<float4>(g_PushConstants.PixelShaderConstants + 416, 0x10)
-#define g_vSampleOffsets(INDEX) select((INDEX) < 224, vk::RawBufferLoad<float4>(g_PushConstants.PixelShaderConstants + (0 + min(INDEX, 223)) * 16, 0x10), 0.0)
-#define g_vSampleWeights(INDEX) select((INDEX) < 211, vk::RawBufferLoad<float4>(g_PushConstants.PixelShaderConstants + (13 + min(INDEX, 210)) * 16, 0x10), 0.0)
+#define g_vCount REBLUE_PSC(416)
+#define g_vSampleOffsets(INDEX) select((INDEX) < 224, g_GuestPSC[0 + min(INDEX, 223)], 0.0)
+#define g_vSampleWeights(INDEX) select((INDEX) < 211, g_GuestPSC[13 + min(INDEX, 210)], 0.0)
 
 #else
 

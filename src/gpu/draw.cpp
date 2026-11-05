@@ -144,6 +144,66 @@ void ReadDeviceRenderState(VideoState &s, u32 device_guest) {
                          mask_or_default(rs->stencilWriteMask));
   }
 }
+#if !defined(REBLUE_D3D12)
+// The guest VS/PS/shared constants are dynamic uniform buffers in one set
+// (shader_common.h): whatever changed is uploaded, then the set is bound with
+// all three offsets. Those have to point into the same upload chunk, so a block
+// left in a chunk that an upload just rolled past is uploaded again where the
+// newest one landed. False when a block could not be uploaded at all.
+bool BindGuestConstants(VideoState &s, u32 device_guest) {
+  bool rebind = false;
+  plume::RenderDescriptorSet *newest = nullptr;
+  const auto take = [&](u32 i, const ConstantAllocation &a) {
+    if (!a.size || !a.constantSet)
+      return;
+    s.guest_constant_set[i] = a.constantSet;
+    s.guest_constant_offset[i] = a.offset;
+    newest = a.constantSet;
+    rebind = true;
+  };
+
+  if (s.dirtyStates.vertexShaderConstants)
+    take(0, UploadVertexShaderConstants(device_guest));
+  if (s.dirtyStates.pixelShaderConstants)
+    take(1, UploadPixelShaderConstants(device_guest));
+  // SharedConstants rebuilds from live guest state every draw: the sampler
+  // fetch constants are written by unhooked recompiled code, so there is no
+  // dirty signal. The upload is skipped internally when the built block is
+  // byte-identical to the one already bound on this list.
+  take(2, UploadSharedConstants(device_guest));
+  if (!rebind)
+    return true;
+
+  for (int pass = 0; pass < 3; ++pass) {
+    bool same = true;
+    for (u32 i = 0; i < 3; ++i) {
+      if (s.guest_constant_set[i] == newest)
+        continue;
+      same = false;
+      if (i == 0) {
+        take(0, UploadVertexShaderConstants(device_guest));
+      } else if (i == 1) {
+        take(1, UploadPixelShaderConstants(device_guest));
+      } else {
+        InvalidateSharedBinding();
+        take(2, UploadSharedConstants(device_guest));
+      }
+    }
+    if (same)
+      break;
+  }
+  for (u32 i = 0; i < 3; ++i) {
+    if (s.guest_constant_set[i] != newest || !newest)
+      return false;
+  }
+
+  s.command_list->setGraphicsDescriptorSet(newest,
+                                           kGuestConstantDescriptorSetIndex,
+                                           s.guest_constant_offset, 3);
+  return true;
+}
+#endif
+
 } // namespace
 
 bool Video::FlushRenderState(u32 device_guest) {
@@ -249,29 +309,17 @@ bool Video::FlushRenderStateLocked(u32 device_guest) {
   // Vulkan push offsets 0/8/16 follow the guest PushConstants member order
   // emitted by the recompiler.
   if (device_guest) {
+#if defined(REBLUE_D3D12)
     if (s.dirtyStates.vertexShaderConstants) {
       auto vs_alloc = UploadVertexShaderConstants(device_guest);
-      if (vs_alloc.size) {
-#if defined(REBLUE_D3D12)
+      if (vs_alloc.size)
         s.command_list->setGraphicsRootDescriptor(vs_alloc.ref, 0);
-#else
-        s.command_list->setGraphicsPushConstants(
-            kGuestPushConstantRangeIndex, &vs_alloc.gpuAddress, 0, sizeof(u64));
-#endif
-      }
     }
 
     if (s.dirtyStates.pixelShaderConstants) {
       auto ps_alloc = UploadPixelShaderConstants(device_guest);
-      if (ps_alloc.size) {
-#if defined(REBLUE_D3D12)
+      if (ps_alloc.size)
         s.command_list->setGraphicsRootDescriptor(ps_alloc.ref, 1);
-#else
-        s.command_list->setGraphicsPushConstants(kGuestPushConstantRangeIndex,
-                                                 &ps_alloc.gpuAddress,
-                                                 sizeof(u64), sizeof(u64));
-#endif
-      }
     }
 
     // SharedConstants rebuilds from live guest state every draw: the sampler
@@ -279,15 +327,12 @@ bool Video::FlushRenderStateLocked(u32 device_guest) {
     // dirty signal. The upload is skipped internally when the built block is
     // byte-identical to the one already bound on this list.
     auto sc_alloc = UploadSharedConstants(device_guest);
-    if (sc_alloc.size) {
-#if defined(REBLUE_D3D12)
+    if (sc_alloc.size)
       s.command_list->setGraphicsRootDescriptor(sc_alloc.ref, 2);
 #else
-      s.command_list->setGraphicsPushConstants(kGuestPushConstantRangeIndex,
-                                               &sc_alloc.gpuAddress,
-                                               2 * sizeof(u64), sizeof(u64));
+    if (!BindGuestConstants(s, device_guest))
+      return false;
 #endif
-    }
   }
 
   // Lens flare occlusion count: the counter UAV (root descriptor 3 on D3D12,

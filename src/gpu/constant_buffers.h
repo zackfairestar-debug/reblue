@@ -17,6 +17,7 @@
 #include <rex/types.h>
 
 #include <plume_render_interface.h>
+#include <plume_render_interface_builders.h>
 
 namespace bd::gpu {
 
@@ -62,7 +63,18 @@ struct ConstantAllocation {
   plume::RenderBufferReference ref{};
   u64 gpuAddress = 0;
   u32 size = 0;
+  // Vulkan: the chunk's guest constant set (see DescribeGuestConstantSet) and
+  // the allocation's offset in the chunk, its dynamic offset there.
+  plume::RenderDescriptorSet *constantSet = nullptr;
+  u32 offset = 0;
 };
+
+#if !defined(REBLUE_D3D12)
+// The guest constants set (pipeline set kGuestConstantDescriptorSetIndex):
+// the VS, PS and shared blocks as dynamic uniform buffers, bindings 0..2,
+// matching shader_common.h. Every upload chunk carries one pointed at itself.
+void DescribeGuestConstantSet(plume::RenderDescriptorSetBuilder &builder);
+#endif
 
 bool TryInit();
 

@@ -69,6 +69,9 @@ inline constexpr u32 kGuestPushConstantRangeIndex = 0;
 inline constexpr u32 kCopyPushConstantRangeIndex = 0;
 inline constexpr u32 kCopyPushConstantByteOffset = 24;
 inline constexpr u32 kOcclusionDescriptorSetIndex = 4;
+// The guest VS/PS/shared constants as dynamic uniform buffers
+// (shader_common.h, set 5).
+inline constexpr u32 kGuestConstantDescriptorSetIndex = 5;
 #endif
 
 } // namespace bd::gpu

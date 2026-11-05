@@ -411,6 +411,14 @@ struct VideoState {
   double gpu_busy_ms = 0.0; // summed since the last [perf] line
   u32 gpu_busy_frames = 0;
 
+#if !defined(REBLUE_D3D12)
+  // The guest constant set (set 5) and its dynamic offsets for the VS, PS and
+  // shared blocks, as last uploaded on this command list (draw.cpp
+  // BindGuestConstants).
+  plume::RenderDescriptorSet *guest_constant_set[3] = {};
+  u32 guest_constant_offset[3] = {};
+#endif
+
   bool draw_framebuffer_bound = false;
   GuestTexture *bound_fb_rt = nullptr;
   GuestTexture *bound_fb_ds = nullptr;

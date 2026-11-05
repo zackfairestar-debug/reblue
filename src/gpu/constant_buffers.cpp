@@ -48,6 +48,9 @@ struct UploadChunk {
   std::unique_ptr<plume::RenderBuffer> buffer;
   u8 *mapped = nullptr;
   u64 gpuBase = 0;
+  // Vulkan: the guest constant set over this chunk, bound with dynamic
+  // offsets per draw.
+  std::unique_ptr<plume::RenderDescriptorSet> constantSet;
 };
 
 // One upload chunk list per in-flight frame slot, rewound only after that
@@ -118,6 +121,19 @@ bool CreateChunk(UploadChunk &chunk) {
     return false;
   }
   chunk.gpuBase = chunk.buffer->getDeviceAddress();
+#if !defined(REBLUE_D3D12)
+  plume::RenderDescriptorSetBuilder set_builder;
+  DescribeGuestConstantSet(set_builder);
+  chunk.constantSet = set_builder.create(device);
+  if (!chunk.constantSet) {
+    BD_ERROR("constant_buffers: guest constant descriptor set failed");
+    chunk.buffer.reset();
+    return false;
+  }
+  chunk.constantSet->setBuffer(0, chunk.buffer.get(), kConstantBlockBytes);
+  chunk.constantSet->setBuffer(1, chunk.buffer.get(), kConstantBlockBytes);
+  chunk.constantSet->setBuffer(2, chunk.buffer.get(), sizeof(SharedConstants));
+#endif
   return true;
 }
 
@@ -155,6 +171,8 @@ ConstantAllocation Allocate(UploadState &s, u32 size, u32 alignment) {
   a.ref = plume::RenderBufferReference(chunk.buffer.get(), off);
   a.gpuAddress = chunk.gpuBase + off;
   a.size = size;
+  a.constantSet = chunk.constantSet.get();
+  a.offset = off;
   return a;
 }
 
@@ -268,6 +286,16 @@ void PinScreenUVScaleReg(u8 *block) {
     reg[1] = 0.5f;
   }
 }
+
+#if !defined(REBLUE_D3D12)
+void DescribeGuestConstantSet(plume::RenderDescriptorSetBuilder &builder) {
+  builder.begin();
+  builder.addConstantBufferDynamic(0); // VS float constants
+  builder.addConstantBufferDynamic(1); // PS float constants
+  builder.addConstantBufferDynamic(2); // SharedConstants
+  builder.end();
+}
+#endif
 
 ConstantAllocation UploadVertexShaderConstants(u32 device_guest) {
   BD_CPU_ZONE("UploadVSConstants");
