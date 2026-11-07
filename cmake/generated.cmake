@@ -73,6 +73,26 @@ if(REXGLUE_ENTRYPOINT_GENERATED_SOURCES)
     rexglue_apply_recomp_settings(reblue_recomp
         "${REXGLUE_ENTRYPOINT_INCLUDE_DIR}/reblue_pch.h")
     add_dependencies(reblue_recomp reblue_codegen)
+    if(ANDROID)
+        # libreblue.so is a shared library, and every guest function is a
+        # default-visibility weak symbol, so each guest-to-guest call went
+        # through the PLT: a GOT load and an indirect branch per bl, on the
+        # hottest path there is, and ~17k entries in the dynamic symbol table
+        # the loader has to bind at startup. Nothing outside the library
+        # looks them up (JNI entry points and SDL_main carry their own
+        # default visibility), so hiding them turns every call into a direct
+        # bl. Hooks in reblue_common still override the weak definitions at
+        # link time.
+        set_target_properties(reblue_recomp PROPERTIES
+            CXX_VISIBILITY_PRESET hidden
+            VISIBILITY_INLINES_HIDDEN ON)
+        # The recompiled code has no C buffers for a canary to protect, only
+        # the guest's registers, and the unwinder works from .eh_frame, so
+        # neither the canary checks nor a frame record per guest function
+        # buys anything on the device.
+        target_compile_options(reblue_recomp PRIVATE
+            -fno-stack-protector -fomit-frame-pointer)
+    endif()
     set(REBLUE_RECOMP_LIB reblue_recomp)
 endif()
 
