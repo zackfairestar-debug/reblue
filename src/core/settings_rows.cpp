@@ -15,6 +15,9 @@
 #include <iterator>
 #include <string>
 
+#include <cstdlib>
+#include <string>
+
 #include <rex/cvar.h>
 #include <rex/graphics/video_mode_util.h>
 #include <rex/types.h>
@@ -53,6 +56,20 @@ bool WindowRowsHidden() {
 #else
   return false;
 #endif
+}
+
+// Power saving reads the device's thermal service, which only Android has.
+bool PowerSavingHidden() {
+#if defined(__ANDROID__)
+  return false;
+#else
+  return true;
+#endif
+}
+
+double PowerSavingNum() {
+  const std::string v = rex::cvar::GetFlagByName("bd_power_saving");
+  return v.empty() ? 0.0 : std::atof(v.c_str());
 }
 
 double DisplayModeNum() {
@@ -141,6 +158,10 @@ constexpr SettingOption kFPS[] = {
     {.text = "90", .num = 90},
     {.text = "120", .num = 120},
     {.text = "Unlimited", .num = 0, .key = "opt.unlimited"}};
+constexpr SettingOption kPowerSaving[] = {
+    {.text = "Off", .num = 0, .key = "opt.off"},
+    {.text = "Auto", .num = 1, .key = "opt.auto"},
+    {.text = "Max", .num = 2, .key = "opt.max"}};
 constexpr SettingOption kOnOff[] = {
     {.text = "Off", .num = 0, .value = "false", .key = "opt.off"},
     {.text = "On", .num = 1, .value = "true", .key = "opt.on"}};
@@ -609,6 +630,19 @@ constexpr SettingRow kDisplaySettings[] = {
              [](double v) { return gpu::Settings::Get().SetVsync(v != 0.0); }},
      .options = kOnOff,
      .count = OptCount(kOnOff)},
+    {.label = "settings.display.power_saving.label",
+     .group = "menu.header.frame_rate",
+     .desc = "settings.display.power_saving.desc",
+     .binding = {.get = PowerSavingNum,
+                 .set =
+                     [](double v) {
+                       return rex::cvar::SetFlagByName(
+                           "bd_power_saving",
+                           std::to_string(static_cast<int>(v)));
+                     }},
+     .options = kPowerSaving,
+     .count = OptCount(kPowerSaving),
+     .hidden = PowerSavingHidden},
 };
 
 constexpr SettingRow kGraphicsSettings[] = {

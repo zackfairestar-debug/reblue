@@ -25,7 +25,17 @@ REXCVAR_DECLARE(i32, bd_glyph_set);
 REXCVAR_DECLARE(bool, bd_vibration);
 REXCVAR_DECLARE(f64, bd_camera_speed);
 
-REXCVAR_DEFINE_INT32(bd_fps_limit, 0, kCvarGroup,
+#if defined(__ANDROID__)
+// A phone has no vblank worth chasing past its own panel rate: an uncapped game
+// renders frames the compositor throws away, which is pure heat and battery for
+// nothing, and the heat is what then drags the clocks down (the 60 -> 30 fps
+// decay the logs show over a session). Cap at 60 by default; 0 still uncaps.
+constexpr i32 kDefaultFPSLimit = 60;
+#else
+constexpr i32 kDefaultFPSLimit = 0;
+#endif
+
+REXCVAR_DEFINE_INT32(bd_fps_limit, kDefaultFPSLimit, kCvarGroup,
                      "Frame-rate cap: 0 = unlimited, above 30 the fixed 30Hz "
                      "simulation is interpolated.");
 

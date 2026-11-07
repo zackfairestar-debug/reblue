@@ -224,6 +224,11 @@ MinimapCapture g_minimap;
 u32 g_stepCounter = 0;
 u32 g_sampleCounter = 0;
 
+// The leader's position, written every engine step while the panel polls, so
+// the map can follow the player each frame instead of at the snapshot rate.
+std::mutex g_posMutex;
+std::string g_pos; // "x,z,yaw" or empty off the field
+
 std::string g_markersStem;
 std::string g_markersJson; // the "markers" array, cached
 std::string g_tallyJson;   // "chests"/"points" pairs, cached
@@ -601,10 +606,31 @@ void CompanionSample() {
     }
     g_engineRunning.store(true, std::memory_order_release);
   }
-  if (++g_stepCounter % kSampleEvery != 0)
-    return;
   // Nobody is reading: no second screen, or the panel asleep or off.
   if (NowMs() - g_lastPollMs.load(std::memory_order_relaxed) > kIdleAfterMs)
+    return;
+  {
+    // Cheap: the leader's transform only, every step.
+    std::string pos;
+    const Game &g = Game::Get();
+    if (g.IsReady() && g.Mode() == EngineMode::FieldActive) {
+      const Player leader = g.FieldPlayerEntity().Leader().Chara();
+      if (leader) {
+        const Vec3 p = leader.Position();
+        const f32 yaw = leader.Rotation()[1];
+        if (std::isfinite(p[0]) && std::isfinite(p[2]) && std::isfinite(yaw)) {
+          char buf[64];
+          std::snprintf(buf, sizeof(buf), "%.2f,%.2f,%.4f",
+                        static_cast<double>(p[0]), static_cast<double>(p[2]),
+                        static_cast<double>(yaw));
+          pos = buf;
+        }
+      }
+    }
+    std::lock_guard lock(g_posMutex);
+    g_pos = std::move(pos);
+  }
+  if (++g_stepCounter % kSampleEvery != 0)
     return;
   ++g_sampleCounter;
 
@@ -637,6 +663,20 @@ Java_org_reblue_android_DualScreenCompanion_nativeState(JNIEnv *env, jclass) {
   {
     std::lock_guard lock(g_mutex);
     copy = g_snapshot;
+  }
+  return env->NewStringUTF(copy.c_str());
+}
+
+// The leader's live position, "x,z,yaw" (empty off the field). Polled every
+// animation frame by the map, so it only copies a string.
+JNIEXPORT jstring JNICALL
+Java_org_reblue_android_DualScreenCompanion_nativePos(JNIEnv *env, jclass) {
+  using namespace bd::platform::android;
+  g_lastPollMs.store(NowMs(), std::memory_order_relaxed);
+  std::string copy;
+  {
+    std::lock_guard lock(g_posMutex);
+    copy = g_pos;
   }
   return env->NewStringUTF(copy.c_str());
 }

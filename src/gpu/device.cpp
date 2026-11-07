@@ -237,8 +237,12 @@ bool RecreateSwapChainLocked(VideoState &s) {
   plume::RenderWindow render_window{};
   if (!bd::platform::GetNativeRenderWindow(nullptr, render_window))
     return false;
-  plume::RenderSwapChainDesc desc(render_window, kSwapChainFormat,
-                                  kNumFrames + 1, false, kNumFrames);
+  // kNumFrames images, not kNumFrames + 1: present() waits the render semaphore
+  // and AdvanceAndWaitReused() waits the frame fence, so the extra image is
+  // never needed to keep the queue fed. It only ever sits full and adds a frame
+  // of display latency, which on a touchscreen reads as input lag.
+  plume::RenderSwapChainDesc desc(render_window, kSwapChainFormat, kNumFrames,
+                                  false, kNumFrames);
   s.swap_chain = s.queue->createSwapChain(desc);
 #if !defined(REBLUE_D3D12)
   if (s.swap_chain)
@@ -548,10 +552,10 @@ bool Video::CreateHostDevice(rex::ui::Window *window) {
             Settings::Get().ShadowDimension(), Settings::Get().ShadowDistance(),
             Settings::Get().Anisotropy(), Settings::Get().Vsync());
 
-    // kNumFrames + 1: a flip model swapchain needs one back buffer beyond the
-    // frames in flight so acquiring N+1 never waits on scanout.
-    plume::RenderSwapChainDesc desc(render_window, kSwapChainFormat,
-                                    kNumFrames + 1, false, kNumFrames);
+    // kNumFrames images, matching RecreateSwapChainLocked: the extra image only
+    // added a frame of display latency.
+    plume::RenderSwapChainDesc desc(render_window, kSwapChainFormat, kNumFrames,
+                                    false, kNumFrames);
     s.swap_chain = s.queue->createSwapChain(desc);
 #if !defined(REBLUE_D3D12)
     // plume's VulkanSwapChain defers VkSwapchain creation to resize(), so a

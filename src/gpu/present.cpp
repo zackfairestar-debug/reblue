@@ -38,10 +38,23 @@ namespace bd::gpu {
 
 namespace {
 
+// setVsyncEnabled() only records the *required* present mode; createdPresentMode
+// follows on the next resize, and VulkanSwapChain::needsResize() compares the
+// two. Calling it every frame therefore made needsResize() permanently true and
+// rebuilt the swap chain on each present: a device idle, a fresh set of images
+// and a full pipeline flush per frame, which is the "present" time and the
+// multi-second worst frames in the logs. Only push it when the setting moves.
 void ApplyVsync(VideoState &s) {
-  if (s.swap_chain) {
-    s.swap_chain->setVsyncEnabled(Settings::Get().Vsync());
-  }
+  if (!s.swap_chain)
+    return;
+  static bool applied = false;
+  static bool last = false;
+  const bool want = Settings::Get().Vsync();
+  if (applied && want == last)
+    return;
+  applied = true;
+  last = want;
+  s.swap_chain->setVsyncEnabled(want);
 }
 
 constexpr i32 kIdleFPS = 30;
@@ -56,11 +69,19 @@ constexpr bool kSurfaceCanVanish = false;
 void PaceFrame(bool idle = false) {
   using Clock = std::chrono::steady_clock;
   static Clock::time_point next{};
-  i32 fps = bd::engine::Settings::Get().FPSLimit();
+  i32 fps = bd::engine::TargetFPS();
   if (bd::engine::SofdecPlayer::Playing())
     fps = 30;
+  // A held cutscene is a still image by definition, so the target rate is
+  // wasted frames and heat. Only ever *lowers* the target, so a tuned cap the
+  // user already set below 30 still wins.
+  if (bd::engine::CutscenePause::Get().Frozen() && (fps <= 0 || fps > kIdleFPS))
+    fps = kIdleFPS;
   if (idle && (fps <= 0 || fps > kIdleFPS))
     fps = kIdleFPS;
+  // Not while idle: there is no surface then, or only the installer on it.
+  if (!idle)
+    bd::platform::android::ApplyDisplayFrameRate(fps);
   if (fps <= 0) {
     next = {};
     return;
@@ -166,7 +187,7 @@ void LogFrameRate() {
           frames / seconds, seconds, worst_ms, frame_ms,
           frame_ms - acquire - gpu - present - pace, gpu_busy, gpu, acquire,
           present, pace,
-          bd::engine::Settings::Get().FPSLimit(), Settings::Get().Vsync(),
+          bd::engine::TargetFPS(), Settings::Get().Vsync(),
           PassSummary(frames), bd::platform::android::ThermalSummary());
   g_waits = {};
   window_start = now;
@@ -366,6 +387,7 @@ void Video::Present(GuestTexture *frontBuffer) {
       (kSurfaceCanVanish && !s.swap_chain)) {
     SubmitOpenListLocked(s);
     RecreateSwapChainLocked(s);
+    bd::platform::android::InvalidateDisplayFrameRate();
   }
 
   const bool resize_requested =
@@ -477,8 +499,10 @@ void Video::Present(GuestTexture *frontBuffer) {
             std::chrono::duration<double, std::milli>(frame_waits_ms));
     bd::platform::android::ReportFrameWork(
         std::chrono::duration_cast<std::chrono::nanoseconds>(work),
-        bd::engine::Settings::Get().FPSLimit());
+        bd::engine::TargetFPS());
   }
+  // Between frames, so interpolation never flips halfway through one.
+  bd::platform::android::UpdatePowerSaving();
   {
     BD_CPU_ZONE("PaceFrame");
     WaitTimer timer(g_waits.pace_ms);

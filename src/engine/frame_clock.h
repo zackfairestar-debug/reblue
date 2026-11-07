@@ -15,6 +15,10 @@ namespace bd::engine {
 
 void Advance();
 
+// The frame rate the game is paced to: the user's cap, lowered by the
+// power-saving mode while it is engaged. 0 = uncapped.
+i32 TargetFPS();
+
 bool InterpolationActive();
 
 bool TickDue();

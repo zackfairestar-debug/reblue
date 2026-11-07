@@ -275,7 +275,7 @@ foreach(target IN LISTS REBLUE_VULKAN_TARGETS)
     elseif(ANDROID)
         # plume creates the surface from the ANativeWindow and reaches the
         # system libvulkan through volk.
-        target_link_libraries(${target} PRIVATE android log)
+        target_link_libraries(${target} PRIVATE android log nativewindow)
     else()
         # plume builds the surface through SDL3, which dlopen's the X11 or Wayland
         # client libraries itself, so nothing here links a window system.

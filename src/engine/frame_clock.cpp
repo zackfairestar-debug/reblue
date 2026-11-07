@@ -13,6 +13,7 @@
 #include "engine/cutscene_pause.h"
 #include "engine/settings.h"
 #include "engine/sofdec_player.h"
+#include "platform/android_perf.h"
 
 namespace bd::engine {
 namespace {
@@ -67,8 +68,17 @@ double NowSeconds() {
 
 } // namespace
 
+i32 TargetFPS() {
+  i32 fps = Settings::Get().FPSLimit();
+  // Power saving only ever lowers the cap, so a user cap below it still wins.
+  const i32 power = bd::platform::android::PowerFPSCap();
+  if (power > 0 && (fps <= 0 || fps > power))
+    fps = power;
+  return fps;
+}
+
 bool InterpolationActive() {
-  const i32 fps = Settings::Get().FPSLimit();
+  const i32 fps = TargetFPS();
   return (fps == 0 || fps > 30) && !SofdecPlayer::Playing();
 }
 
