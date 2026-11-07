@@ -81,6 +81,23 @@ struct ThermalSample {
   float forecast = NAN; // 10 s ahead
 };
 
+// Battery, pushed by ReblueActivity's ACTION_BATTERY_CHANGED receiver.
+// -1 until the first broadcast.
+std::atomic<int> g_battery_level{-1};
+std::atomic<bool> g_battery_charging{false};
+std::atomic<int> g_battery_decicelsius{0};
+
+// Not every device reports thermal headroom (an AYN Thor gives the status
+// only, and it read "none" all session while the console got hot), so the
+// battery's own temperature, which every device broadcasts and which tracks
+// the skin the player holds, is the other heat signal.
+constexpr int kHotBatteryDeci = 400;  // 40.0 C
+constexpr int kCoolBatteryDeci = 370; // 37.0 C
+
+int BatteryDeci() {
+  return g_battery_decicelsius.load(std::memory_order_relaxed);
+}
+
 using Clock = std::chrono::steady_clock;
 constexpr auto kSampleEvery = std::chrono::seconds(2);
 // Hot when the device is already throttling, or about to: the forecast moves
@@ -117,12 +134,16 @@ const ThermalSample &Sample() {
 bool SampleHot(const ThermalSample &t) {
   if (t.status >= ATHERMAL_STATUS_MODERATE)
     return true;
+  if (BatteryDeci() >= kHotBatteryDeci)
+    return true;
   return (std::isfinite(t.headroom) && t.headroom >= kHotHeadroom) ||
          (std::isfinite(t.forecast) && t.forecast >= kHotHeadroom);
 }
 
 bool SampleCool(const ThermalSample &t) {
   if (t.status >= ATHERMAL_STATUS_LIGHT)
+    return false;
+  if (BatteryDeci() > kCoolBatteryDeci)
     return false;
   const float h = std::isfinite(t.forecast) ? t.forecast : t.headroom;
   // No headroom reading at all: the status alone says it is fine.
@@ -134,11 +155,6 @@ bool g_hot = false;
 bool g_low = false;
 Clock::time_point g_cool_since{};
 
-// Battery, pushed by ReblueActivity's ACTION_BATTERY_CHANGED receiver.
-// -1 until the first broadcast.
-std::atomic<int> g_battery_level{-1};
-std::atomic<bool> g_battery_charging{false};
-std::atomic<int> g_battery_decicelsius{0};
 // At or under this and not charging, Auto runs at 30 even when cool.
 constexpr int kLowBattery = 15;
 
@@ -221,6 +237,12 @@ std::string ThermalSummary() {
     if (std::isfinite(t.forecast))
       out += std::format(" (10s {:.2f})", t.forecast);
   }
+  if (const int level = g_battery_level.load(std::memory_order_relaxed);
+      level >= 0)
+    out += std::format(" | battery {}% {:.1f} C{}", level, BatteryDeci() / 10.0,
+                       g_battery_charging.load(std::memory_order_relaxed)
+                           ? " charging"
+                           : "");
   out += std::format(" | power {}", ModeName(Mode()));
   if (const int cap = PowerFPSCap())
     out += std::format(", capped {}", cap);
@@ -274,8 +296,9 @@ void UpdatePowerSaving() {
       g_hot = true;
       g_cool_since = {};
       BD_INFO("[power] device running hot (thermal {}, headroom {:.2f}, 10s "
-              "{:.2f}): {} fps until it cools",
-              t.status, t.headroom, t.forecast, kPowerSavingFPS);
+              "{:.2f}, battery {:.1f} C): {} fps until it cools",
+              t.status, t.headroom, t.forecast, BatteryDeci() / 10.0,
+              kPowerSavingFPS);
     } else if (g_hot) {
       if (!SampleCool(t)) {
         g_cool_since = {};
@@ -283,8 +306,9 @@ void UpdatePowerSaving() {
         g_cool_since = now;
       } else if (now - g_cool_since >= kCoolHold) {
         g_hot = false;
-        BD_INFO("[power] cooled down (headroom {:.2f}): frame-rate cap lifted",
-                t.headroom);
+        BD_INFO("[power] cooled down (headroom {:.2f}, battery {:.1f} C): "
+                "frame-rate cap lifted",
+                t.headroom, BatteryDeci() / 10.0);
       }
     }
     cap = (g_hot || g_low) ? kPowerSavingFPS : 0;

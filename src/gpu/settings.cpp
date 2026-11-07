@@ -16,6 +16,7 @@
 #include "core/settings.h" // kCvarGroup
 #include "gpu/output.h"
 #include "gpu/pipeline/pso_predictor.h"
+#include "platform/reboot.h" // ConfigFilePath
 
 REXCVAR_DECLARE(bool, bd_pso_precache);
 REXCVAR_DECLARE(bool, bd_geometry_gpu_upload);
@@ -33,6 +34,12 @@ REXCVAR_DECLARE(double, bd_shadow_distance);
 REXCVAR_DECLARE(i32, bd_aspect_ratio);
 REXCVAR_DECLARE(i32, bd_fov_offset);
 REXCVAR_DECLARE(bool, bd_vsync);
+
+#if defined(__ANDROID__)
+REXCVAR_DEFINE_BOOL(bd_android_render_default_applied, false, kCvarGroup,
+                    "Android: the 1280x720 render default has been applied "
+                    "once; after that the resolution is the player's.");
+#endif
 
 REXCVAR_DEFINE_BOOL(bd_pso_precache, true, kCvarGroup,
                     "Precompile pipelines during loads instead of at first "
@@ -344,8 +351,36 @@ void Settings::AdoptCvars() {
   AdoptReflectionQuality();
 }
 
+#if defined(__ANDROID__)
+namespace {
+// Handheld panels are 1080p or more, and drawing the scene at the full panel
+// size kept the GPU at 13-17 ms of a 16.7 ms frame on an AYN Thor: flat out,
+// and the heat and battery drain with it. 1280x720 is what Blue Dragon was
+// made for, a 2.25x smaller scene, and on a 6" screen the upscale is hard to
+// tell apart. Applied once per install (existing ones too), so picking Auto
+// or any other size in the menu afterwards sticks.
+constexpr const char *kAndroidRenderDefault = "1280x720";
+
+void ApplyAndroidRenderDefault() {
+  if (REXCVAR_GET(bd_android_render_default_applied))
+    return;
+  if (rex::cvar::GetFlagByName("resolution").empty())
+    rex::cvar::SetFlagByName("resolution", kAndroidRenderDefault);
+  rex::cvar::SetFlagByName("bd_android_render_default_applied", "true");
+  // Saved now, so the marker survives even if the menu is never opened.
+  rex::cvar::SaveConfig(bd::platform::ConfigFilePath());
+  Output::Recompute();
+  BD_INFO("[config] render resolution defaults to {} on Android",
+          rex::cvar::GetFlagByName("resolution"));
+}
+} // namespace
+#endif
+
 void Settings::Init() {
   AdoptCvars();
+#if defined(__ANDROID__)
+  ApplyAndroidRenderDefault();
+#endif
 
   auto reg = [](const char *name, void (Settings::*adopt)()) {
     rex::cvar::RegisterChangeCallback(
