@@ -27,7 +27,9 @@
 #include "engine/game_tables.h"
 #include "engine/gimmicks.h"
 #include "engine/iss_event.h"
+#include "engine/game_task.h"
 #include "engine/menus/camp_main_task.h"
+#include "engine/script_man_task.h"
 #include "engine/sofdec_player.h"
 
 namespace bd::platform::android {
@@ -260,6 +262,16 @@ std::string PhenomeName(u32 id) {
   return CachedName(g_phenomeNames, id, GameTables::Get().PhenomeRecord(id));
 }
 
+// Walking the field: the leader is the player's to steer. Game::Mode() calls
+// any busy loader slot "loading", and some areas stream all the time (the
+// Ancient Ruins caverns kept a slot busy while the player walked), which hid
+// the map and left "Loading..." in the header for the whole visit.
+bool PlayerOnField(const Game &g) {
+  return g.FieldGameplayActive() && g.FieldPlayerEntity().HasControl() &&
+         g.ScriptManTask().SceneState() !=
+             bd::engine::kSceneStateStageTransition;
+}
+
 const char *ModeName(const Game &g) {
   if (!g.IsReady())
     return "boot";
@@ -269,6 +281,9 @@ const char *ModeName(const Game &g) {
   case EngineMode::Battle:
     return "battle";
   case EngineMode::Loading:
+    if (PlayerOnField(g))
+      return CampMainTask::Get() ? "menu" : "field";
+    return "loading";
   case EngineMode::FieldTransition:
     return "loading";
   case EngineMode::FieldActive:
@@ -506,8 +521,11 @@ std::string BuildBody() {
     if (std::find(inParty.begin(), inParty.end(), m.Address()) !=
         inParty.end())
       continue;
+    // The roster holds every playable character from the start; the ones
+    // still to join have no unlock bit yet, and listing them put "Marumaro
+    // learns the Black Mage class" in the journal hours before he joins.
     const Player c = m.Chara();
-    if (c)
+    if (c && g.GameTask().IsSlotUnlocked(c.SlotId()))
       AppendMember(j, c, false, false);
   }
   j.Close(']');
@@ -613,7 +631,8 @@ void CompanionSample() {
     // Cheap: the leader's transform only, every step.
     std::string pos;
     const Game &g = Game::Get();
-    if (g.IsReady() && g.Mode() == EngineMode::FieldActive) {
+    if (g.IsReady() && (g.Mode() == EngineMode::FieldActive ||
+                        (g.Mode() == EngineMode::Loading && PlayerOnField(g)))) {
       const Player leader = g.FieldPlayerEntity().Leader().Chara();
       if (leader) {
         const Vec3 p = leader.Position();

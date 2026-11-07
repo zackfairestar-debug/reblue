@@ -155,8 +155,11 @@ bool g_hot = false;
 bool g_low = false;
 Clock::time_point g_cool_since{};
 
-// At or under this and not charging, Auto runs at 30 even when cool.
-constexpr int kLowBattery = 15;
+// Off the charger, Auto runs at 30 fps, the rate Blue Dragon's simulation
+// ticks at. An AYN Thor reports neither thermal status nor headroom, and its
+// battery stayed under 31 C while the SoC ran hot and the charge fell 1% a
+// minute at 60 fps, so neither heat signal ever fired. Plugged in, Auto goes
+// to 60 unless the device reports it is hot.
 
 // A mode picked on the second screen, applied on the frame thread so the
 // cvar and its config write never race the settings menu. -1 = none.
@@ -285,12 +288,12 @@ void UpdatePowerSaving() {
   } else if (mode == PowerSaving::Auto) {
     const int level = g_battery_level.load(std::memory_order_relaxed);
     const bool charging = g_battery_charging.load(std::memory_order_relaxed);
-    const bool low = level >= 0 && level <= kLowBattery && !charging;
+    const bool low = level >= 0 && !charging;
     if (low != g_low) {
       g_low = low;
       BD_INFO("[power] battery {}% {}: {}", level,
               charging ? "charging" : "on battery",
-              low ? "30 fps to make it last" : "low-battery cap lifted");
+              low ? "30 fps while on battery" : "on the charger, up to 60 fps");
     }
     if (!g_hot && SampleHot(t)) {
       g_hot = true;
