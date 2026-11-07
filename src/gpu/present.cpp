@@ -58,6 +58,11 @@ void ApplyVsync(VideoState &s) {
 }
 
 constexpr i32 kIdleFPS = 30;
+// Backgrounded or with the screen off nobody sees a frame, so the guest only
+// creeps along: the CPU sleeps nearly all the time and the game is where the
+// player left it when they come back (one 30 Hz tick per frame, about a sixth
+// of real speed). It keeps running so nothing it waits on times out.
+constexpr i32 kBackgroundFPS = 5;
 
 // Only Android takes the window surface away from under a live device.
 #if defined(__ANDROID__)
@@ -66,7 +71,7 @@ constexpr bool kSurfaceCanVanish = true;
 constexpr bool kSurfaceCanVanish = false;
 #endif
 
-void PaceFrame(bool idle = false) {
+void PaceFrame(bool idle = false, bool background = false) {
   using Clock = std::chrono::steady_clock;
   static Clock::time_point next{};
   i32 fps = bd::engine::TargetFPS();
@@ -79,6 +84,8 @@ void PaceFrame(bool idle = false) {
     fps = kIdleFPS;
   if (idle && (fps <= 0 || fps > kIdleFPS))
     fps = kIdleFPS;
+  if (background)
+    fps = kBackgroundFPS;
   // Not while idle: there is no surface then, or only the installer on it.
   if (!idle)
     bd::platform::android::ApplyDisplayFrameRate(fps);
@@ -378,7 +385,7 @@ void Video::Present(GuestTexture *frontBuffer) {
     AbandonFrame(s, lock);
     if (lock.owns_lock())
       lock.unlock();
-    PaceFrame(true);
+    PaceFrame(true, true);
     return;
   }
   cache_saved = false;

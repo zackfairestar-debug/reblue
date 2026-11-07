@@ -32,11 +32,13 @@ REXCVAR_DEFINE_INT32(bd_power_saving, kDefaultPowerSaving, kCvarGroup,
 
 #include <SDL3/SDL_video.h>
 #include <android/native_window.h>
+#include <jni.h>
 #include <android/performance_hint.h>
 #include <android/thermal.h>
 #include <unistd.h>
 
 #include "core/logging.h"
+#include "platform/reboot.h" // ConfigFilePath
 
 namespace bd::platform::android {
 namespace {
@@ -129,7 +131,26 @@ bool SampleCool(const ThermalSample &t) {
 
 std::atomic<int> g_power_cap{0};
 bool g_hot = false;
+bool g_low = false;
 Clock::time_point g_cool_since{};
+
+// Battery, pushed by ReblueActivity's ACTION_BATTERY_CHANGED receiver.
+// -1 until the first broadcast.
+std::atomic<int> g_battery_level{-1};
+std::atomic<bool> g_battery_charging{false};
+std::atomic<int> g_battery_decicelsius{0};
+// At or under this and not charging, Auto runs at 30 even when cool.
+constexpr int kLowBattery = 15;
+
+// A mode picked on the second screen, applied on the frame thread so the
+// cvar and its config write never race the settings menu. -1 = none.
+std::atomic<int> g_pending_mode{-1};
+
+// What the second screen shows, published once a second by the frame thread.
+std::atomic<int> g_live_fps{0};
+std::atomic<int> g_live_status{-1};
+std::atomic<int> g_live_headroom_pct{-1};
+std::atomic<bool> g_live_hot{false};
 
 PowerSaving Mode() {
   const int32_t v = REXCVAR_GET(bd_power_saving);
@@ -209,13 +230,46 @@ std::string ThermalSummary() {
 int PowerFPSCap() { return g_power_cap.load(std::memory_order_relaxed); }
 
 void UpdatePowerSaving() {
+  if (const int want = g_pending_mode.exchange(-1, std::memory_order_acq_rel);
+      want >= 0) {
+    rex::cvar::SetFlagByName("bd_power_saving", std::to_string(want));
+    rex::cvar::SaveConfig(bd::platform::ConfigFilePath());
+    BD_INFO("[power] mode set to {} from the second screen", want);
+  }
+  const ThermalSample &t = Sample();
+  const auto now = Clock::now();
+  {
+    // The frame rate the second screen shows, over the last second.
+    static Clock::time_point since = now;
+    static int frames = 0;
+    ++frames;
+    if (now - since >= std::chrono::seconds(1)) {
+      const double secs = std::chrono::duration<double>(now - since).count();
+      g_live_fps.store(static_cast<int>(frames / secs + 0.5),
+                       std::memory_order_relaxed);
+      frames = 0;
+      since = now;
+      g_live_status.store(t.status, std::memory_order_relaxed);
+      const float h = std::isfinite(t.forecast) ? t.forecast : t.headroom;
+      g_live_headroom_pct.store(
+          std::isfinite(h) ? static_cast<int>(h * 100) : -1,
+          std::memory_order_relaxed);
+    }
+  }
   const PowerSaving mode = Mode();
   int cap = 0;
   if (mode == PowerSaving::Max) {
     cap = kPowerSavingFPS;
   } else if (mode == PowerSaving::Auto) {
-    const ThermalSample &t = Sample();
-    const auto now = Clock::now();
+    const int level = g_battery_level.load(std::memory_order_relaxed);
+    const bool charging = g_battery_charging.load(std::memory_order_relaxed);
+    const bool low = level >= 0 && level <= kLowBattery && !charging;
+    if (low != g_low) {
+      g_low = low;
+      BD_INFO("[power] battery {}% {}: {}", level,
+              charging ? "charging" : "on battery",
+              low ? "30 fps to make it last" : "low-battery cap lifted");
+    }
     if (!g_hot && SampleHot(t)) {
       g_hot = true;
       g_cool_since = {};
@@ -233,10 +287,12 @@ void UpdatePowerSaving() {
                 t.headroom);
       }
     }
-    cap = g_hot ? kPowerSavingFPS : 0;
+    cap = (g_hot || g_low) ? kPowerSavingFPS : 0;
   } else {
     g_hot = false;
+    g_low = false;
   }
+  g_live_hot.store(g_hot, std::memory_order_relaxed);
   g_power_cap.store(cap, std::memory_order_relaxed);
 }
 
@@ -280,5 +336,45 @@ void ApplyDisplayFrameRate(int fps) {
 }
 
 } // namespace bd::platform::android
+
+extern "C" {
+
+JNIEXPORT void JNICALL Java_org_reblue_android_ReblueActivity_nativeBattery(
+    JNIEnv *, jclass, jint level, jboolean charging, jint decicelsius) {
+  using namespace bd::platform::android;
+  g_battery_level.store(level, std::memory_order_relaxed);
+  g_battery_charging.store(charging, std::memory_order_relaxed);
+  g_battery_decicelsius.store(decicelsius, std::memory_order_relaxed);
+}
+
+JNIEXPORT void JNICALL
+Java_org_reblue_android_DualScreenCompanion_nativeSetPowerSaving(JNIEnv *,
+                                                                 jclass,
+                                                                 jint mode) {
+  using namespace bd::platform::android;
+  if (mode >= 0 && mode <= 2)
+    g_pending_mode.store(mode, std::memory_order_release);
+}
+
+// {"fps":60,"thermal":0,"headroom":42,"mode":1,"cap":0,"hot":false,
+//  "battery":81,"charging":false,"temp":36.5} for the second screen.
+JNIEXPORT jstring JNICALL
+Java_org_reblue_android_DualScreenCompanion_nativePerf(JNIEnv *env, jclass) {
+  using namespace bd::platform::android;
+  const int pending = g_pending_mode.load(std::memory_order_acquire);
+  const int mode = pending >= 0 ? pending : static_cast<int>(Mode());
+  const std::string json = std::format(
+      R"({{"fps":{},"thermal":{},"headroom":{},"mode":{},"cap":{},"hot":{},"battery":{},"charging":{},"temp":{:.1f}}})",
+      g_live_fps.load(std::memory_order_relaxed),
+      g_live_status.load(std::memory_order_relaxed),
+      g_live_headroom_pct.load(std::memory_order_relaxed), mode, PowerFPSCap(),
+      g_live_hot.load(std::memory_order_relaxed),
+      g_battery_level.load(std::memory_order_relaxed),
+      g_battery_charging.load(std::memory_order_relaxed),
+      g_battery_decicelsius.load(std::memory_order_relaxed) / 10.0);
+  return env->NewStringUTF(json.c_str());
+}
+
+} // extern "C"
 
 #endif // __ANDROID__
