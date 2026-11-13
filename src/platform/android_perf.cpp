@@ -24,11 +24,22 @@ REXCVAR_DEFINE_INT32(bd_power_saving, kDefaultPowerSaving, kCvarGroup,
                      "own rate, while the device runs hot), 2 max (always 30 "
                      "fps).");
 
+REXCVAR_DEFINE_BOOL(bd_performance_cores, true, kCvarGroup,
+                    "Android: keep the game's threads off the efficiency "
+                    "cores (the CPUs with half the capacity of the fastest "
+                    "one or less).");
+
 #if defined(__ANDROID__)
 
+#include <algorithm>
 #include <atomic>
+#include <cerrno>
 #include <cmath>
+#include <cstdio>
 #include <format>
+#include <sched.h>
+#include <string>
+#include <vector>
 
 #include <SDL3/SDL_video.h>
 #include <android/native_window.h>
@@ -360,6 +371,87 @@ void ApplyDisplayFrameRate(int fps) {
   }
   g_rate_window = window;
   g_rate_fps = fps;
+}
+
+namespace {
+
+int ConfiguredCpus() {
+  const long cpus = sysconf(_SC_NPROCESSORS_CONF);
+  return static_cast<int>(std::clamp<long>(cpus, 0, CPU_SETSIZE));
+}
+
+// The CPUs whose capacity is above half the largest one. Empty when the
+// device has no efficiency cores or does not report capacities, so a
+// uniform CPU is left alone.
+cpu_set_t PerformanceCores(int *count, std::string *layout) {
+  cpu_set_t set;
+  CPU_ZERO(&set);
+  *count = 0;
+  const int cpus = ConfiguredCpus();
+  std::vector<int> capacity(static_cast<size_t>(cpus), 0);
+  int largest = 0;
+  for (int cpu = 0; cpu < cpus; ++cpu) {
+    char path[64];
+    std::snprintf(path, sizeof(path),
+                  "/sys/devices/system/cpu/cpu%d/cpu_capacity", cpu);
+    if (FILE *file = std::fopen(path, "re")) {
+      if (std::fscanf(file, "%d", &capacity[cpu]) != 1)
+        capacity[cpu] = 0;
+      std::fclose(file);
+    }
+    largest = std::max(largest, capacity[cpu]);
+    if (!layout->empty())
+      *layout += ' ';
+    *layout += std::to_string(capacity[cpu]);
+  }
+  bool has_efficiency = false;
+  for (int cpu = 0; cpu < cpus; ++cpu) {
+    if (capacity[cpu] > 0 && capacity[cpu] * 2 <= largest) {
+      has_efficiency = true;
+    } else if (capacity[cpu] > 0) {
+      CPU_SET(cpu, &set);
+      ++*count;
+    }
+  }
+  if (!has_efficiency) {
+    CPU_ZERO(&set);
+    *count = 0;
+  }
+  return set;
+}
+
+} // namespace
+
+void PreferPerformanceCores() {
+  if (!REXCVAR_GET(bd_performance_cores)) {
+    BD_INFO("[power] thread placement off (bd_performance_cores = false)");
+    return;
+  }
+  int count = 0;
+  std::string layout;
+  const cpu_set_t cores = PerformanceCores(&count, &layout);
+  if (count == 0) {
+    BD_INFO("[power] thread placement: no efficiency cores (capacity {})",
+            layout);
+    return;
+  }
+  if (sched_setaffinity(0, sizeof(cores), &cores) != 0) {
+    BD_WARN("[power] thread placement: sched_setaffinity failed, errno {}",
+            errno);
+    return;
+  }
+  BD_INFO("[power] thread placement: game threads on {} performance cores "
+          "(capacity {})",
+          count, layout);
+}
+
+void AllowAllCores() {
+  cpu_set_t all;
+  CPU_ZERO(&all);
+  const int cpus = ConfiguredCpus();
+  for (int cpu = 0; cpu < cpus; ++cpu)
+    CPU_SET(cpu, &all);
+  sched_setaffinity(0, sizeof(all), &all);
 }
 
 } // namespace bd::platform::android

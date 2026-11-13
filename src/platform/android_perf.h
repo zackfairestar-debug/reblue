@@ -57,6 +57,17 @@ void ApplyDisplayFrameRate(int fps);
 // sets the rate on it again.
 void InvalidateDisplayFrameRate();
 
+// Restricts the calling thread to the performance cores (capacity above half
+// the fastest CPU's), so every thread it starts afterwards inherits that and
+// the guest, render, GPU and audio threads never land on an efficiency core.
+// Call on the main thread before the runtime starts its threads. Does nothing
+// on a CPU without efficiency cores or with bd_performance_cores = false.
+void PreferPerformanceCores();
+
+// Lets the calling thread run on every CPU again, for background work that
+// should not compete with the game for the performance cores.
+void AllowAllCores();
+
 #else
 
 inline void ReportFrameWork(std::chrono::nanoseconds, int) {}
@@ -65,6 +76,8 @@ inline int PowerFPSCap() { return 0; }
 inline void UpdatePowerSaving() {}
 inline void ApplyDisplayFrameRate(int) {}
 inline void InvalidateDisplayFrameRate() {}
+inline void PreferPerformanceCores() {}
+inline void AllowAllCores() {}
 
 #endif
 

@@ -12,6 +12,7 @@
 #include <thread>
 
 #include "core/logging.h"
+#include "platform/android_perf.h"
 
 #include <rex/ppc.h>
 #include <rex/system/xthread.h>
@@ -60,6 +61,8 @@ void DemoteThreadToBackground() {
 #else
   // who=0 is the calling THREAD on Linux, not the process.
   ::setpriority(PRIO_PROCESS, 0, 10);
+  // Background work may use the efficiency cores the game threads stay off.
+  bd::platform::android::AllowAllCores();
 #endif
 }
 

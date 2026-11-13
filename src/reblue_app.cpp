@@ -44,6 +44,7 @@
 #include "generated/reblue_init.h"
 #include "gpu/gpu.h"
 #include "installer/installer.h"
+#include "platform/android_perf.h"
 #include "platform/platform.h"
 #include "vfs/vfs.h"
 
@@ -276,6 +277,10 @@ void ReblueApp::OnPostInitLogging() {
   BD_INFO("  built:   " REBLUE_BUILD_TIMESTAMP " with " REBLUE_BUILD_COMPILER);
   BD_INFO("  sdk:     rexglue-v" REXGLUE_VERSION_STRING
           " " REXGLUE_BUILD_PLATFORM " @" REXGLUE_BUILD_TIMESTAMP);
+
+  // Before Runtime::Setup starts the kernel, GPU, audio and guest threads, so
+  // they all inherit the main thread's performance-core affinity.
+  bd::platform::android::PreferPerformanceCores();
 }
 
 void ReblueApp::OnPreSetup(rex::RuntimeConfig &config) {
