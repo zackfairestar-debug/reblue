@@ -279,6 +279,18 @@ foreach(target IN LISTS REBLUE_VULKAN_TARGETS)
         # Calls the library makes to its own functions that are still visible
         # (hooks, reblue_common) bind at link time instead of through the PLT.
         target_link_options(${target} PRIVATE "-Wl,-Bsymbolic-functions")
+        # libadrenotools: a custom Vulkan driver (Mesa Turnip) chosen on the
+        # app's GPU driver page. Its hook libraries ship next to libreblue.so.
+        if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/libadrenotools/CMakeLists.txt")
+            if(NOT TARGET adrenotools)
+                add_subdirectory(thirdparty/libadrenotools
+                    "${CMAKE_BINARY_DIR}/adrenotools" EXCLUDE_FROM_ALL)
+            endif()
+            target_link_libraries(${target} PRIVATE adrenotools)
+            target_compile_definitions(${target} PRIVATE REBLUE_HAS_ADRENOTOOLS=1)
+            add_dependencies(${target}
+                main_hook file_redirect_hook gsl_alloc_hook hook_impl)
+        endif()
     else()
         # plume builds the surface through SDL3, which dlopen's the X11 or Wayland
         # client libraries itself, so nothing here links a window system.

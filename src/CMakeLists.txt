@@ -18,6 +18,7 @@ set(reblue_backend_only
     gpu/resolve.cpp
     gpu/shaders/guest_shaders.cpp
     gpu/vertex_declaration.cpp
+    platform/android_gpu_driver.cpp
     platform/crash_handler.cpp
     reblue_app.cpp)
 

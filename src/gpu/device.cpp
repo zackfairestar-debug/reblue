@@ -52,6 +52,7 @@
 #include "gpu/pipeline/pso_recorder.h"
 #include "gpu/settings.h"
 #include "gpu/surface_registry.h"
+#include "platform/android_gpu_driver.h"
 #include "platform/android_lifecycle.h"
 #include "platform/platform.h"
 
@@ -465,6 +466,9 @@ bool Video::CreateHostDevice(rex::ui::Window *window) {
     // D3D12Core.dll that ends up owning the device.
     const bool dred_armed = EnableDred();
 #else
+    // A Turnip package picked on the app's GPU driver page replaces the
+    // system driver here, before plume initialises volk.
+    bd::platform::android::LoadCustomVulkanDriver();
     s.render_iface = plume::CreateVulkanInterface();
     if (!s.render_iface) {
       BD_ERROR("Plume CreateVulkanInterface failed");
@@ -476,6 +480,7 @@ bool Video::CreateHostDevice(rex::ui::Window *window) {
       BD_ERROR("Plume RenderInterface::createDevice failed");
       return false;
     }
+    bd::platform::android::ConfirmVulkanDriverStarted();
 #if defined(__ANDROID__)
     // Before anything builds a pipeline, so all of them can use it.
     LoadPipelineCache(s);
